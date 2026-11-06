@@ -1,0 +1,248 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------------------
+   Unmatched Tracker — dark "gaming" theme.
+   Palette inspired by the Unmatched box art: midnight blue, antique gold,
+   parchment white.
+--------------------------------------------------------------------------- */
+
+@theme {
+  --color-ink-950: #06080f;
+  --color-ink-900: #0a0e1a;
+  --color-ink-850: #0f1524;
+  --color-ink-800: #141c2e;
+  --color-ink-700: #1c2540;
+  --color-ink-600: #263153;
+  --color-ink-500: #33406b;
+
+  --color-gold-300: #f7d27a;
+  --color-gold-400: #efbd4d;
+  --color-gold-500: #d9a03c;
+  --color-gold-600: #b3802a;
+
+  --color-parch-100: #f3f0e8;
+  --color-parch-300: #c9cfdd;
+  --color-parch-500: #8b95ad;
+  --color-parch-600: #6b7690;
+
+  --color-crimson-400: #f2696d;
+  --color-crimson-500: #e04b52;
+  --color-crimson-600: #b53339;
+
+  --color-emerald-400: #4ec98a;
+  --color-emerald-500: #2fa96c;
+  --color-emerald-600: #218253;
+
+  --color-azure-400: #5aa9f7;
+  --color-azure-500: #3b8ce0;
+  --color-azure-600: #2b6cb5;
+
+  --color-violet-400: #a78bfa;
+  --color-violet-500: #8b5cf6;
+
+  --font-display: var(--font-cinzel), 'Times New Roman', serif;
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, sans-serif;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-ink-700);
+  }
+
+  html {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: var(--color-ink-950);
+    color: var(--color-parch-100);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(217, 160, 60, 0.09), transparent),
+      radial-gradient(ellipse 60% 40% at 90% 10%, rgba(59, 140, 224, 0.07), transparent);
+    background-attachment: fixed;
+  }
+
+  ::selection {
+    background-color: rgba(217, 160, 60, 0.35);
+  }
+
+  /* Scrollbar */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--color-ink-900);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--color-ink-600);
+    border-radius: 999px;
+    border: 2px solid var(--color-ink-900);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-ink-500);
+  }
+}
+
+@layer components {
+  /* Panel — the standard card surface used across the dashboard */
+  .panel {
+    background: linear-gradient(180deg, rgba(20, 28, 46, 0.92), rgba(10, 14, 26, 0.92));
+    border: 1px solid var(--color-ink-700);
+    border-radius: 1rem;
+    box-shadow:
+      0 1px 0 0 rgba(255, 255, 255, 0.04) inset,
+      0 18px 40px -24px rgba(0, 0, 0, 0.9);
+  }
+
+  .panel-title {
+    font-family: var(--font-display);
+    letter-spacing: 0.04em;
+    color: var(--color-gold-300);
+  }
+
+  /* Gold hairline used as a section divider */
+  .rule-gold {
+    height: 1px;
+    background: linear-gradient(90deg, transparent, rgba(217, 160, 60, 0.55), transparent);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    border-radius: 0.625rem;
+    padding: 0.625rem 1rem;
+    font-size: 0.875rem;
+    font-weight: 600;
+    transition: all 150ms ease;
+    cursor: pointer;
+    border: 1px solid transparent;
+    white-space: nowrap;
+  }
+  .btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+  .btn-gold {
+    background: linear-gradient(180deg, var(--color-gold-400), var(--color-gold-600));
+    color: #1a1204;
+    box-shadow: 0 6px 18px -8px rgba(217, 160, 60, 0.8);
+  }
+  .btn-gold:hover:not(:disabled) {
+    background: linear-gradient(180deg, var(--color-gold-300), var(--color-gold-500));
+    transform: translateY(-1px);
+  }
+  .btn-ghost {
+    background: rgba(38, 49, 83, 0.4);
+    border-color: var(--color-ink-600);
+    color: var(--color-parch-300);
+  }
+  .btn-ghost:hover:not(:disabled) {
+    background: rgba(51, 64, 107, 0.6);
+    color: var(--color-parch-100);
+  }
+
+  .field {
+    width: 100%;
+    background: var(--color-ink-900);
+    border: 1px solid var(--color-ink-600);
+    border-radius: 0.5rem;
+    padding: 0.625rem 0.75rem;
+    color: var(--color-parch-100);
+    font-size: 0.9rem;
+    outline: none;
+    transition: border-color 150ms ease, box-shadow 150ms ease;
+  }
+  .field:focus {
+    border-color: var(--color-gold-500);
+    box-shadow: 0 0 0 3px rgba(217, 160, 60, 0.18);
+  }
+  select.field {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'%3E%3Cpath fill='%238b95ad' d='M1 1l5 5 5-5'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 0.75rem center;
+    padding-right: 2rem;
+  }
+  select.field option {
+    background: var(--color-ink-900);
+    color: var(--color-parch-100);
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    border-radius: 999px;
+    padding: 0.2rem 0.6rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .tab-btn {
+    position: relative;
+    padding: 0.6rem 0.95rem;
+    border-radius: 0.5rem;
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--color-parch-500);
+    transition: all 150ms ease;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .tab-btn:hover {
+    color: var(--color-parch-100);
+    background: rgba(38, 49, 83, 0.35);
+  }
+  .tab-btn[data-active='true'] {
+    color: var(--color-gold-300);
+    background: rgba(217, 160, 60, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(217, 160, 60, 0.3);
+  }
+
+  .stat-label {
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--color-parch-600);
+  }
+}
+
+/* Recharts polish */
+.recharts-cartesian-axis-tick text {
+  fill: #8b95ad;
+  font-size: 11px;
+}
+.recharts-cartesian-grid line {
+  stroke: rgba(38, 49, 83, 0.6);
+}
+.recharts-tooltip-wrapper {
+  outline: none;
+}
+.recharts-default-tooltip {
+  background: #0f1524 !important;
+  border: 1px solid #263153 !important;
+  border-radius: 0.5rem !important;
+  box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.9);
+}
+
+/* Fade-in animation for panels */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-fade-up {
+  animation: fade-up 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
