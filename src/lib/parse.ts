@@ -5,8 +5,8 @@
  * columns C..J, a 2v2 match fills columns K..V, and columns A (timestamp) and
  * B (mode) are shared by both.
  */
-import { canonicalName, parseTimestamp } from './normalize';
-import type { GameMode, Match, Winner } from './types';
+import { canonicalName, identityKey, parseTimestamp } from './normalize';
+import type { DualControl, GameMode, Match, Winner } from './types';
 
 export const MATCH_COLUMNS = {
   timestamp: 0,
@@ -72,6 +72,24 @@ function cell(row: string[], index: number): string {
 }
 
 /**
+ * Detect a "1 player vs 2 players" match: the same player sits in both seats
+ * of one team and therefore controls two heroes against two opponents.
+ */
+function detectDualControl(
+  players: [string, string],
+  heroes: [string, string],
+  team: 1 | 2,
+): DualControl | null {
+  if (!players[0] || !players[1]) return null;
+  if (identityKey(players[0]) !== identityKey(players[1])) return null;
+  return {
+    player: players[0],
+    team,
+    heroes: [heroes[0] ?? '', heroes[1] ?? ''],
+  };
+}
+
+/**
  * Parse one sheet row into a `Match`.
  * `rowNumber` is the 1-based spreadsheet row (header is row 1).
  */
@@ -102,6 +120,7 @@ export function parseMatchRow(rawRow: string[], rowNumber: number): Match {
     location: null,
     valid: false,
     issues,
+    dualControl: [],
   };
 
   if (!mode) {
@@ -159,6 +178,20 @@ export function parseMatchRow(rawRow: string[], rowNumber: number): Match {
     if (team1Heroes.some((h) => !h) || team2Heroes.some((h) => !h)) {
       issues.push('Не заполнены герои');
     }
+
+    // One player controlling two heroes on the same team.
+    const dual1 = detectDualControl(
+      [team1Players[0], team1Players[1]],
+      [team1Heroes[0], team1Heroes[1]],
+      1,
+    );
+    const dual2 = detectDualControl(
+      [team2Players[0], team2Players[1]],
+      [team2Heroes[0], team2Heroes[1]],
+      2,
+    );
+    if (dual1) base.dualControl.push(dual1);
+    if (dual2) base.dualControl.push(dual2);
   }
 
   // Hero-uniqueness rule: the same hero cannot appear twice in one match.

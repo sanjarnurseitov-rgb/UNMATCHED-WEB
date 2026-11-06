@@ -3,8 +3,22 @@
 import { useMemo, useState } from 'react';
 import { MatchesTimeline, ModeSplitChart, VerticalBars, WinRateRanking } from './charts';
 import { EntityTable } from './EntityTable';
-import { Avatar, Chip, EmptyState, Panel, StatCard, WinRateBar, formatDate, formatPct } from './ui';
-import type { AppData, PairSynergy } from '@/lib/types';
+import {
+  Avatar,
+  Chip,
+  EmptyState,
+  MiniStat,
+  Panel,
+  SplitBar,
+  StatCard,
+  Switch,
+  WinRateBar,
+  formatDate,
+  formatPct,
+} from './ui';
+import { isHomebrew } from '@/lib/normalize';
+import { MIN_GAMES_FOR_RATE, computeStats } from '@/lib/stats';
+import { UNSPECIFIED_MAP, type AppData, type PairSynergy } from '@/lib/types';
 
 type Tab = 'overview' | 'players' | 'heroes' | 'pairs' | 'maps';
 
@@ -16,13 +30,35 @@ const TABS: Array<{ id: Tab; label: string }> = [
   { id: 'maps', label: 'Поля боя' },
 ];
 
+const AZURE = 'var(--color-azure-400)';
+const VIOLET = 'var(--color-violet-400)';
+
 export function Dashboard({ data }: { data: AppData }) {
   const [tab, setTab] = useState<Tab>('overview');
-  const { stats, reference, meta } = data;
+  const [hideFan, setHideFan] = useState(false);
+  const { reference, meta } = data;
+
+  /**
+   * The statistics engine is a pure function, so hiding homebrew characters
+   * simply recomputes them in the browser — every hero-derived widget updates
+   * immediately, without a round trip to the server.
+   */
+  const stats = useMemo(() => {
+    if (!hideFan) return data.stats;
+    return computeStats(data.matches, data.reference, {
+      excludeHeroes: (hero) => isHomebrew(hero),
+      rejectedRows: data.stats.rejectedRows,
+    });
+  }, [hideFan, data]);
+
+  const fanCount = useMemo(
+    () => data.reference.heroes.filter((h) => h.homebrew).length,
+    [data.reference.heroes],
+  );
 
   const sourceLabel =
     meta.source === 'api'
-      ? 'Sheets API'
+      ? 'Google Sheets API'
       : meta.source === 'public'
         ? 'Публичный CSV'
         : 'Демо-снимок';
@@ -33,6 +69,9 @@ export function Dashboard({ data }: { data: AppData }) {
         meta={meta}
         sourceLabel={sourceLabel}
         stats={stats}
+        hideFan={hideFan}
+        onToggleFan={() => setHideFan((v) => !v)}
+        fanCount={fanCount}
       />
 
       <div className="flex gap-1 overflow-x-auto rounded-xl border border-ink-700 bg-ink-900/60 p-1">
@@ -48,19 +87,37 @@ export function Dashboard({ data }: { data: AppData }) {
         ))}
       </div>
 
-      {tab === 'overview' ? <Overview data={data} /> : null}
+      {tab === 'overview' ? <Overview data={data} stats={stats} /> : null}
       {tab === 'players' ? (
-        <Panel title="Игроки" subtitle="Сортировка по количеству игр · клик по строке открывает подробности">
-          <EntityTable records={stats.players} kind="player" emptyMessage="Нет данных об игроках" />
+        <Panel
+          title="Игроки"
+          subtitle="Сортировка по количеству игр · клик по строке открывает подробности"
+        >
+          <EntityTable
+            records={stats.players}
+            kind="player"
+            emptyMessage="Нет данных об игроках"
+          />
         </Panel>
       ) : null}
       {tab === 'heroes' ? (
-        <Panel title="Герои" subtitle={`Всего в базе: ${reference.heroes.length}`}>
-          <EntityTable records={stats.heroes} kind="hero" emptyMessage="Нет данных о героях" />
+        <Panel
+          title="Герои"
+          subtitle={`Всего в базе: ${reference.heroes.length} · фан-персонажей: ${fanCount}`}
+        >
+          <EntityTable
+            records={stats.heroes}
+            kind="hero"
+            emptyMessage={
+              hideFan
+                ? 'Фан-персонажи скрыты — в базе не осталось героев'
+                : 'Нет данных о героях'
+            }
+          />
         </Panel>
       ) : null}
-      {tab === 'pairs' ? <PairsPanel data={data} /> : null}
-      {tab === 'maps' ? <MapsPanel data={data} /> : null}
+      {tab === 'pairs' ? <PairsPanel data={data} stats={stats} /> : null}
+      {tab === 'maps' ? <MapsPanel data={data} stats={stats} /> : null}
     </div>
   );
 }
@@ -71,10 +128,16 @@ function DashboardHeader({
   meta,
   sourceLabel,
   stats,
+  hideFan,
+  onToggleFan,
+  fanCount,
 }: {
   meta: AppData['meta'];
   sourceLabel: string;
   stats: AppData['stats'];
+  hideFan: boolean;
+  onToggleFan: () => void;
+  fanCount: number;
 }) {
   return (
     <div className="flex flex-wrap items-end justify-between gap-4">
@@ -90,6 +153,12 @@ function DashboardHeader({
         </p>
       </div>
       <div className="flex flex-wrap items-center gap-2">
+        <Switch
+          checked={hideFan}
+          onChange={onToggleFan}
+          label="Скрыть фан-героев"
+          description={`Скрыть ${fanCount} фан-персонажей из статистики героев`}
+        />
         <Chip tone={meta.canWrite ? 'emerald' : 'gold'}>
           <span
             className="inline-block h-1.5 w-1.5 rounded-full"
@@ -107,9 +176,7 @@ function DashboardHeader({
 
 /* -------------------------------------------------------------------------- */
 
-function Overview({ data }: { data: AppData }) {
-  const { stats } = data;
-
+function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
   const mapChartData = useMemo(
     () => stats.maps.slice(0, 12).map((m) => ({ name: m.name, value: m.matches })),
     [stats.maps],
@@ -118,67 +185,122 @@ function Overview({ data }: { data: AppData }) {
   const bestHeroPair = stats.bestHeroSynergy[0] ?? null;
   const bestPlayerPair = stats.bestPlayerSynergy[0] ?? null;
 
+  // "Самый активный игрок" — most games played.
+  const mostActive = stats.players[0] ?? null;
+  // "Лучший игрок по винрейту" — the win-rate leaderboard already applies the
+  // minimum-games threshold.
+  const bestPlayer = stats.playerLeaders[0] ?? null;
+
   return (
     <div className="space-y-6">
       {/* KPI row */}
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-6">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3 xl:grid-cols-4">
+        {/* Total matches, split by mode */}
         <StatCard
           label="Всего матчей"
           value={stats.totals.validMatches}
-          sub={`${stats.totals.modes['1v1']} × 1v1 · ${stats.totals.modes['2v2']} × 2v2`}
           accent="gold"
-        />
+        >
+          <div className="mt-2">
+            <SplitBar
+              segments={[
+                { label: '1 vs 1', value: stats.totals.modes['1v1'], color: AZURE },
+                { label: '2 vs 2', value: stats.totals.modes['2v2'], color: VIOLET },
+              ]}
+            />
+          </div>
+        </StatCard>
+
         <StatCard
           label="Сыграно партий"
           value={stats.totals.wins + stats.totals.losses}
           sub="матчей × игроков"
           accent="azure"
         />
+
+        {/* Replaces the old "общий винрейт" card, which was always ~50 %. */}
         <StatCard
-          label="Общий винрейт"
-          value={formatPct(stats.totals.winRate)}
-          sub={`${stats.totals.wins} побед · ${stats.totals.losses} поражений`}
-          accent={stats.totals.winRate >= 0.5 ? 'emerald' : 'crimson'}
+          label="Самый активный игрок"
+          value={mostActive?.name ?? '—'}
+          sub={mostActive ? `${mostActive.games} матчей · винрейт ${formatPct(mostActive.winRate)}` : undefined}
+          accent="violet"
         />
+
+        <StatCard
+          label="Лучший игрок по винрейту"
+          value={bestPlayer?.name ?? '—'}
+          sub={
+            bestPlayer
+              ? `винрейт ${formatPct(bestPlayer.winRate)} · ${bestPlayer.games} матчей`
+              : undefined
+          }
+          accent="emerald"
+        />
+
         <StatCard
           label="Самый частый герой"
           value={stats.mostPlayedHero?.name ?? '—'}
           sub={
             stats.mostPlayedHero
-              ? `${stats.mostPlayedHero.games} игр · WR ${formatPct(stats.mostPlayedHero.winRate)}`
+              ? `${stats.mostPlayedHero.games} игр · винрейт ${formatPct(stats.mostPlayedHero.winRate)}`
               : undefined
           }
           accent="violet"
         />
+
         <StatCard
-          label="Популярное поле"
+          label="Самое популярное поле"
           value={stats.mostPopularMap?.name ?? '—'}
           sub={stats.mostPopularMap ? `${stats.mostPopularMap.games} матчей` : undefined}
           accent="azure"
         />
+
+        {/* Total / official / fan breakdown — spans two columns so the
+            seven KPI cards fill the four-column grid evenly. */}
         <StatCard
           label="Уникальных героев"
-          value={data.reference.heroes.length}
-          sub={`${data.reference.players.length} игроков в базе`}
+          value={stats.heroBreakdown.total}
           accent="gold"
-        />
+          className="xl:col-span-2"
+        >
+          <div className="mt-2 space-y-1">
+            <MiniStat label="Официальные" value={stats.heroBreakdown.official} />
+            <MiniStat
+              label="Фан-персонажи"
+              value={stats.heroBreakdown.homebrew}
+              tone="text-violet-400"
+              hint="Персонажи с пометкой «(фан)»"
+            />
+          </div>
+        </StatCard>
       </div>
+
+      {stats.totals.dualControlMatches > 0 ? (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-violet-500/35 bg-violet-500/8 px-4 py-3">
+          <Chip tone="violet">1 игрок · 2 героя</Chip>
+          <p className="text-xs text-parch-400">
+            В <b className="text-violet-400">{stats.totals.dualControlMatches}</b> матчах один
+            игрок вёл сразу двух героев против двух соперников. Такой матч засчитывается игроку
+            один раз, а оба героя засчитываются за него.
+          </p>
+        </div>
+      ) : null}
 
       {/* Best pair callouts */}
       <div className="grid gap-4 lg:grid-cols-2">
         <SynergyCallout
           title="Лучшая синергия героев · 2 vs 2"
           pair={bestHeroPair}
-          kind="hero"
-          heroNames={data.reference.heroes.map((h) => h.name)}
-          heroImages={Object.fromEntries(data.reference.heroes.map((h) => [h.name, h.image ?? null]))}
+          images={Object.fromEntries(
+            data.reference.heroes.map((h) => [h.name, h.image ?? null]),
+          )}
         />
         <SynergyCallout
           title="Лучшая синергия игроков · 2 vs 2"
           pair={bestPlayerPair}
-          kind="player"
-          heroNames={data.reference.players.map((p) => p.name)}
-          heroImages={Object.fromEntries(data.reference.players.map((p) => [p.name, p.image ?? null]))}
+          images={Object.fromEntries(
+            data.reference.players.map((p) => [p.name, p.image ?? null]),
+          )}
         />
       </div>
 
@@ -200,7 +322,7 @@ function Overview({ data }: { data: AppData }) {
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel
           title="Топ героев по винрейту"
-          subtitle="Минимум 3 матча на героя"
+          subtitle={`Минимум ${MIN_GAMES_FOR_RATE} матчей на героя`}
           action={<Chip tone="gold">Топ-10</Chip>}
         >
           <WinRateRanking
@@ -213,7 +335,7 @@ function Overview({ data }: { data: AppData }) {
         </Panel>
         <Panel
           title="Топ игроков по винрейту"
-          subtitle="Минимум 3 матча на игрока"
+          subtitle={`Минимум ${MIN_GAMES_FOR_RATE} матчей на игрока`}
           action={<Chip tone="gold">Топ-10</Chip>}
         >
           <WinRateRanking
@@ -228,7 +350,11 @@ function Overview({ data }: { data: AppData }) {
 
       {/* Map popularity + recent matches */}
       <div className="grid gap-4 xl:grid-cols-3">
-        <Panel title="Самые популярные поля" subtitle="Топ-12 по числу матчей" className="xl:col-span-2">
+        <Panel
+          title="Самые популярные поля"
+          subtitle="Топ-12 по числу матчей"
+          className="xl:col-span-2"
+        >
           <VerticalBars data={mapChartData} />
         </Panel>
         <Panel title="Последние матчи" subtitle="По дате записи">
@@ -236,64 +362,8 @@ function Overview({ data }: { data: AppData }) {
         </Panel>
       </div>
 
-      <DataQualityPanel data={data} />
+      <DataQualityPanel stats={stats} />
     </div>
-  );
-}
-
-/* -------------------------------------------------------------------------- */
-
-/**
- * Surfaces the rows that could not be counted, so the table can be cleaned up
- * instead of silently losing games.
- */
-function DataQualityPanel({ data }: { data: AppData }) {
-  const { stats } = data;
-  const hasIssues = stats.rejectedRows.length > 0 || stats.degenerateRows > 0;
-  if (!hasIssues) return null;
-
-  return (
-    <Panel
-      title="Качество данных"
-      subtitle="Строки в таблице, которые обработаны особым образом"
-      action={<Chip tone="gold">К гигиене таблицы</Chip>}
-    >
-      <div className="space-y-4 text-sm">
-        {stats.rejectedRows.length > 0 ? (
-          <div>
-            <p className="stat-label mb-2">
-              Исключено из статистики — {stats.rejectedRows.length}
-            </p>
-            <ul className="space-y-1.5">
-              {stats.rejectedRows.map((row) => (
-                <li
-                  key={row.rowNumber}
-                  className="flex flex-wrap items-center gap-2 rounded-lg border border-crimson-600/30 bg-crimson-600/8 px-3 py-2"
-                >
-                  <span className="chip border border-ink-600 bg-ink-800 text-parch-400">
-                    строка {row.rowNumber}
-                  </span>
-                  <span className="text-xs text-parch-300">{row.reason}</span>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        {stats.degenerateRows > 0 ? (
-          <div className="rounded-lg border border-gold-600/30 bg-gold-500/8 px-3 py-2.5">
-            <p className="stat-label mb-1">
-              Один игрок в двух местах команды — {stats.degenerateRows}
-            </p>
-            <p className="text-xs text-parch-400">
-              В этих строках один и тот же игрок указан дважды в одной команде. Матч учтён, но
-              игрок засчитан один раз, чтобы не завышать его количество игр и винрейт. Такие пары
-              исключены из таблицы синергий.
-            </p>
-          </div>
-        ) : null}
-      </div>
-    </Panel>
   );
 }
 
@@ -302,15 +372,11 @@ function DataQualityPanel({ data }: { data: AppData }) {
 function SynergyCallout({
   title,
   pair,
-  kind,
-  heroNames,
-  heroImages,
+  images,
 }: {
   title: string;
   pair: PairSynergy | null;
-  kind: 'hero' | 'player';
-  heroNames: string[];
-  heroImages: Record<string, string | null>;
+  images: Record<string, string | null>;
 }) {
   return (
     <Panel title={title} subtitle="Пара с лучшим винрейтом (минимум 3 матча)">
@@ -323,7 +389,7 @@ function SynergyCallout({
               <Avatar
                 key={name}
                 name={name}
-                image={heroImages[name] ?? null}
+                image={images[name] ?? null}
                 size={54}
                 rounded="rounded-xl ring-2 ring-ink-850"
               />
@@ -343,15 +409,13 @@ function SynergyCallout({
           </div>
         </div>
       )}
-      {kind === 'hero' ? null : null}
     </Panel>
   );
 }
 
 /* -------------------------------------------------------------------------- */
 
-function PairsPanel({ data }: { data: AppData }) {
-  const { stats } = data;
+function PairsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
   const heroImages = Object.fromEntries(data.reference.heroes.map((h) => [h.name, h.image ?? null]));
   const playerImages = Object.fromEntries(data.reference.players.map((p) => [p.name, p.image ?? null]));
 
@@ -359,7 +423,7 @@ function PairsPanel({ data }: { data: AppData }) {
     <div className="grid gap-4 xl:grid-cols-2">
       <Panel
         title="Синергия героев · 2 vs 2"
-        subtitle="Обе играли в одной команде. WR считается по матчам пары"
+        subtitle="Обе играли в одной команде. Винрейт считается по матчам пары"
       >
         <SynergyTable pairs={stats.bestHeroSynergy} images={heroImages} />
       </Panel>
@@ -419,7 +483,7 @@ function PairsPanel({ data }: { data: AppData }) {
                 {stats.headToHead.map((h) => (
                   <tr key={`${h.a}|${h.b}`} className="border-b border-ink-800/70">
                     <td className="py-2 pr-3 text-parch-100">
-                      {h.a} <span className="text-parch-600">vs</span> {h.b}
+                      {h.a} <span className="text-parch-600">против</span> {h.b}
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums text-parch-300">{h.games}</td>
                     <td className="py-2 pr-3 text-right tabular-nums">
@@ -457,7 +521,7 @@ function SynergyTable({
             <th className="stat-label py-2 pr-3">Пара</th>
             <th className="stat-label py-2 pr-3 text-right">Матчей</th>
             <th className="stat-label py-2 pr-3 text-right">Побед</th>
-            <th className="stat-label w-36 py-2 pr-3">WR</th>
+            <th className="stat-label w-36 py-2 pr-3">Винрейт</th>
           </tr>
         </thead>
         <tbody>
@@ -500,10 +564,11 @@ function SynergyTable({
 
 /* -------------------------------------------------------------------------- */
 
-function MapsPanel({ data }: { data: AppData }) {
-  const counts = data.stats.maps;
+function MapsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
+  const counts = stats.maps;
   const totalWithMap = counts.reduce((sum, c) => sum + c.matches, 0);
   const totalMatches = data.matches.filter((m) => m.valid).length;
+  const unspecified = counts.find((c) => c.name === UNSPECIFIED_MAP);
 
   return (
     <div className="grid gap-4 xl:grid-cols-3">
@@ -523,39 +588,107 @@ function MapsPanel({ data }: { data: AppData }) {
                   <th className="stat-label py-2 pr-3">Поле</th>
                   <th className="stat-label py-2 pr-3 text-right">Матчей</th>
                   <th className="stat-label py-2 pr-3 text-right">Доля</th>
-                  <th className="stat-label py-2 pr-3 text-right">WR полей</th>
+                  <th className="stat-label py-2 pr-3 text-right">Винрейт полей</th>
                 </tr>
               </thead>
               <tbody>
-                {counts.map((entry, index) => (
-                  <tr key={entry.name} className="border-b border-ink-800/70">
-                    <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
-                    <td className="py-2 pr-3 text-parch-100">{entry.name}</td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
-                      {entry.matches}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-parch-500">
-                      {totalMatches > 0
-                        ? formatPct(entry.matches / totalMatches, 0)
-                        : '—'}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
-                      {entry.games > 0 ? formatPct(entry.wins / entry.games) : '—'}
-                    </td>
-                  </tr>
-                ))}
+                {counts.map((entry, index) => {
+                  const isUnspecified = entry.name === UNSPECIFIED_MAP;
+                  return (
+                    <tr
+                      key={entry.name}
+                      className={`border-b border-ink-800/70 ${
+                        isUnspecified ? 'bg-ink-800/25 italic' : ''
+                      }`}
+                    >
+                      <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
+                      <td className="py-2 pr-3 text-parch-100">
+                        {entry.name}
+                        {isUnspecified ? (
+                          <span className="ml-2 text-xs text-parch-600">
+                            поле не указано
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
+                        {entry.matches}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums text-parch-500">
+                        {totalMatches > 0 ? formatPct(entry.matches / totalMatches, 0) : '—'}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
+                        {entry.games > 0 ? formatPct(entry.winRate) : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
         )}
       </Panel>
 
-      <Panel title="Популярность" subtitle="Топ-12 полей по числу матчей">
-        <VerticalBars
-          data={counts.slice(0, 12).map((c) => ({ name: c.name, value: c.matches }))}
-        />
-      </Panel>
+      <div className="space-y-4">
+        <Panel title="Популярность" subtitle="Топ-12 полей по числу матчей">
+          <VerticalBars
+            data={counts
+              .filter((c) => c.name !== UNSPECIFIED_MAP)
+              .slice(0, 12)
+              .map((c) => ({ name: c.name, value: c.matches }))}
+          />
+        </Panel>
+
+        {unspecified ? (
+          <Panel title="Поле не указано" subtitle="Матчи без записанного поля боя">
+            <p className="text-sm text-parch-300">
+              <b className="text-gold-400">{unspecified.matches}</b> матчей были записаны без
+              выбора поля боя. Они учтены в общей статистике, но собраны в отдельной категории
+              «{UNSPECIFIED_MAP}», чтобы не искажать рейтинг полей.
+            </p>
+          </Panel>
+        ) : null}
+      </div>
     </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Surfaces the rows that could not be counted, so the table can be cleaned up
+ * instead of silently losing games.
+ */
+function DataQualityPanel({ stats }: { stats: AppData['stats'] }) {
+  const hasIssues = stats.rejectedRows.length > 0;
+  if (!hasIssues) return null;
+
+  return (
+    <Panel
+      title="Качество данных"
+      subtitle="Строки в таблице, которые обработаны особым образом"
+      action={<Chip tone="gold">К гигиене таблицы</Chip>}
+    >
+      <div className="space-y-4 text-sm">
+        <div>
+          <p className="stat-label mb-2">
+            Исключено из статистики — {stats.rejectedRows.length}
+          </p>
+          <ul className="space-y-1.5">
+            {stats.rejectedRows.map((row) => (
+              <li
+                key={row.rowNumber}
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-crimson-600/30 bg-crimson-600/8 px-3 py-2"
+              >
+                <span className="chip border border-ink-600 bg-ink-800 text-parch-400">
+                  строка {row.rowNumber}
+                </span>
+                <span className="text-xs text-parch-300">{row.reason}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -584,17 +717,24 @@ function RecentMatches({ data }: { data: AppData }) {
           className="rounded-lg border border-ink-700 bg-ink-900 px-3 py-2 text-xs"
         >
           <div className="flex items-center justify-between gap-2">
-            <Chip tone={match.mode === '1v1' ? 'azure' : 'violet'}>
-              {match.mode === '1v1' ? '1 vs 1' : '2 vs 2'}
-            </Chip>
+            <div className="flex items-center gap-1.5">
+              <Chip tone={match.mode === '1v1' ? 'azure' : 'violet'}>
+                {match.mode === '1v1' ? '1 vs 1' : '2 vs 2'}
+              </Chip>
+              {match.dualControl.length > 0 ? (
+                <Chip tone="violet">1 игрок · 2 героя</Chip>
+              ) : null}
+            </div>
             <span className="text-parch-600">{formatDate(match.timestamp)}</span>
           </div>
           <p className="mt-1.5 text-parch-300">
             {match.mode === '1v1'
-              ? `${match.players[0]} (${match.heroes[0]})  vs  ${match.players[1]} (${match.heroes[1]})`
-              : `${match.team1Players.join(' + ')}  vs  ${match.team2Players.join(' + ')}`}
+              ? `${match.players[0]} (${match.heroes[0]})  против  ${match.players[1]} (${match.heroes[1]})`
+              : `${match.team1Players.join(' + ')}  против  ${match.team2Players.join(' + ')}`}
           </p>
-          {match.map ? <p className="mt-0.5 text-parch-600">📍 {match.map}</p> : null}
+          <p className="mt-0.5 text-parch-600">
+            📍 {match.map ?? UNSPECIFIED_MAP}
+          </p>
         </li>
       ))}
     </ul>

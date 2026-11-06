@@ -39,7 +39,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                     UNMATCHED
                   </span>
                   <span className="hidden text-[0.65rem] font-semibold uppercase tracking-[0.22em] text-gold-500 sm:block">
-                    Match Tracker
+                    Трекер матчей
                   </span>
                 </span>
               </Link>

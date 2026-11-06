@@ -6,6 +6,7 @@ import {
   Bar,
   BarChart,
   Cell,
+  LabelList,
   Legend,
   Line,
   LineChart,
@@ -16,6 +17,7 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
+import { formatPct } from './ui';
 
 const GOLD = 'var(--color-gold-400)';
 const EMERALD = 'var(--color-emerald-400)';
@@ -23,34 +25,58 @@ const CRIMSON = 'var(--color-crimson-400)';
 const AZURE = 'var(--color-azure-400)';
 const VIOLET = 'var(--color-violet-400)';
 
+type TooltipEntry = {
+  name?: string;
+  value?: number | string;
+  color?: string;
+  payload?: Record<string, unknown>;
+};
+
+/**
+ * Dark tooltip.
+ *
+ * NOTE: when a custom `content` element is supplied to <Tooltip>, Recharts
+ * ignores the `formatter` prop entirely — the raw value would be rendered
+ * (e.g. 0.8181 instead of 81,8 %). Formatting therefore happens inside this
+ * component via the optional `format` callback.
+ */
 function DarkTooltip({
   active,
   payload,
   label,
+  format,
+  suffix,
 }: {
   active?: boolean;
-  payload?: Array<{ name?: string; value?: number | string; color?: string; payload?: Record<string, unknown> }>;
+  payload?: TooltipEntry[];
   label?: string | number;
+  format?: (value: number | string, name: string) => string;
+  suffix?: string;
 }) {
   if (!active || !payload?.length) return null;
   return (
     <div className="rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 text-xs shadow-xl">
       {label !== undefined ? <p className="mb-1 font-semibold text-parch-100">{label}</p> : null}
-      {payload.map((entry, index) => (
-        <p key={index} className="flex items-center gap-2 text-parch-300">
-          <span
-            className="inline-block h-2 w-2 rounded-full"
-            style={{ background: entry.color }}
-          />
-          <span className="text-parch-500">{entry.name}:</span>
-          <span className="font-semibold text-parch-100">{entry.value}</span>
-        </p>
-      ))}
+      {payload.map((entry, index) => {
+        const raw = entry.value ?? '';
+        const shown = format ? format(raw, entry.name ?? '') : String(raw);
+        return (
+          <p key={index} className="flex items-center gap-2 text-parch-300">
+            <span
+              className="inline-block h-2 w-2 rounded-full"
+              style={{ background: entry.color }}
+            />
+            <span className="text-parch-500">{entry.name}:</span>
+            <span className="font-semibold text-parch-100">{shown}</span>
+            {suffix ? <span className="text-parch-500">{suffix}</span> : null}
+          </p>
+        );
+      })}
     </div>
   );
 }
 
-/** Matches per month with a cumulative-ish win/loss split. */
+/** Matches per month with a win/loss split. */
 export function MatchesTimeline({
   data,
 }: {
@@ -141,6 +167,36 @@ export function ModeSplitChart({
   );
 }
 
+/** Tooltip for the win-rate ranking: percentage + number of games. */
+function RankTooltip({
+  active,
+  payload,
+}: {
+  active?: boolean;
+  payload?: TooltipEntry[];
+}) {
+  if (!active || !payload?.length) return null;
+  const entry = payload[0];
+  const games = Number(entry?.payload?.games ?? 0);
+  return (
+    <div className="rounded-lg border border-ink-600 bg-ink-850 px-3 py-2 text-xs shadow-xl">
+      <p className="mb-1 font-semibold text-parch-100">
+        {String(entry?.payload?.name ?? entry?.name ?? '')}
+      </p>
+      <p className="flex items-center gap-2 text-parch-300">
+        <span className="text-parch-500">Винрейт:</span>
+        <span className="font-semibold text-parch-100">
+          {formatPct(Number(entry?.value ?? 0))}
+        </span>
+      </p>
+      <p className="flex items-center gap-2 text-parch-300">
+        <span className="text-parch-500">Матчей:</span>
+        <span className="font-semibold text-parch-100">{games}</span>
+      </p>
+    </div>
+  );
+}
+
 /** Horizontal win-rate ranking. */
 export function WinRateRanking({
   data,
@@ -152,7 +208,9 @@ export function WinRateRanking({
   }
   return (
     <ResponsiveContainer width="100%" height={Math.max(200, data.length * 34 + 40)}>
-      <BarChart data={data} layout="vertical" margin={{ top: 4, right: 16, left: 8, bottom: 4 }}>
+      <BarChart data={data} layout="vertical" margin={{ top: 4, right: 56, left: 8, bottom: 4 }}>
+        {/* The domain leaves room for the percentage label drawn at the end
+            of each bar, so a 100 % bar is not clipped. */}
         <XAxis type="number" domain={[0, 1]} hide />
         <YAxis
           type="category"
@@ -162,14 +220,8 @@ export function WinRateRanking({
           width={132}
           tick={{ fontSize: 11, fill: 'var(--color-parch-300)' }}
         />
-        <Tooltip
-          content={<DarkTooltip />}
-          formatter={(value, name) => [
-            `${(Number(value) * 100).toFixed(1).replace('.', ',')}%`,
-            name === 'winRate' ? 'Винрейт' : String(name),
-          ]}
-        />
-        <Bar dataKey="winRate" name="winRate" radius={[0, 6, 6, 0]} barSize={18}>
+        <Tooltip cursor={{ fill: 'rgba(217,160,60,0.06)' }} content={<RankTooltip />} />
+        <Bar dataKey="winRate" name="Винрейт" radius={[0, 6, 6, 0]} barSize={18}>
           {data.map((entry, index) => (
             <Cell
               key={index}
@@ -177,6 +229,14 @@ export function WinRateRanking({
               fillOpacity={0.85}
             />
           ))}
+          <LabelList
+            dataKey="winRate"
+            position="right"
+            offset={8}
+            fill="var(--color-parch-300)"
+            fontSize={11}
+            formatter={(label) => formatPct(Number(String(label)))}
+          />
         </Bar>
       </BarChart>
     </ResponsiveContainer>
@@ -208,7 +268,10 @@ export function VerticalBars({
           tick={{ fontSize: 10, fill: 'var(--color-parch-500)' }}
         />
         <YAxis tickLine={false} axisLine={false} allowDecimals={false} />
-        <Tooltip content={<DarkTooltip />} cursor={{ fill: 'rgba(217,160,60,0.06)' }} />
+        <Tooltip
+          content={<DarkTooltip />}
+          cursor={{ fill: 'rgba(217,160,60,0.06)' }}
+        />
         <Bar dataKey="value" name="Матчей" radius={[6, 6, 0, 0]} fill={color} fillOpacity={0.85} />
       </BarChart>
     </ResponsiveContainer>

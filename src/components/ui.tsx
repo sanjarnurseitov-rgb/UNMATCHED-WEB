@@ -102,12 +102,14 @@ export function StatCard({
   value,
   sub,
   accent = 'gold',
+  className = '',
   children,
 }: {
   label: string;
   value: React.ReactNode;
   sub?: React.ReactNode;
   accent?: 'gold' | 'azure' | 'emerald' | 'crimson' | 'violet';
+  className?: string;
   children?: React.ReactNode;
 }) {
   const accents = {
@@ -126,7 +128,7 @@ export function StatCard({
   const isTextValue = typeof value === 'string' && !isNumeric;
 
   return (
-    <div className="panel animate-fade-up relative min-w-0 overflow-hidden p-4">
+    <div className={`panel animate-fade-up relative min-w-0 overflow-hidden p-4 ${className}`}>
       <div
         className="absolute inset-x-0 top-0 h-px opacity-60"
         style={{
@@ -156,12 +158,74 @@ export function StatCard({
   );
 }
 
+/** One line inside a stat card: label on the left, value on the right. */
+export function MiniStat({
+  label,
+  value,
+  tone = 'text-parch-100',
+  hint,
+}: {
+  label: string;
+  value: React.ReactNode;
+  tone?: string;
+  hint?: string;
+}) {
+  return (
+    <div className="flex items-baseline justify-between gap-2" title={hint}>
+      <span className="truncate text-[0.7rem] text-parch-500">{label}</span>
+      <span className={`shrink-0 text-sm font-bold tabular-nums ${tone}`}>{value}</span>
+    </div>
+  );
+}
+
+/** Proportional bar used to split a total into segments (1 vs 1 / 2 vs 2). */
+export function SplitBar({
+  segments,
+}: {
+  segments: Array<{ label: string; value: number; color: string }>;
+}) {
+  const total = segments.reduce((sum, s) => sum + s.value, 0);
+  return (
+    <div>
+      <div className="flex h-1.5 w-full overflow-hidden rounded-full bg-ink-800">
+        {segments.map((segment) => (
+          <span
+            key={segment.label}
+            title={`${segment.label}: ${segment.value}`}
+            style={{
+              width: total > 0 ? `${(segment.value / total) * 100}%` : '0%',
+              background: segment.color,
+            }}
+            className="h-full transition-all duration-500"
+          />
+        ))}
+      </div>
+      <div className="mt-2 space-y-1">
+        {segments.map((segment) => (
+          <div key={segment.label} className="flex items-center justify-between gap-2">
+            <span className="flex items-center gap-1.5 text-[0.7rem] text-parch-500">
+              <span
+                className="inline-block h-1.5 w-1.5 rounded-full"
+                style={{ background: segment.color }}
+              />
+              {segment.label}
+            </span>
+            <span className="text-xs font-bold tabular-nums text-parch-100">{segment.value}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export function Chip({
   children,
   tone = 'neutral',
+  title,
 }: {
   children: React.ReactNode;
   tone?: 'neutral' | 'gold' | 'emerald' | 'crimson' | 'azure' | 'violet';
+  title?: string;
 }) {
   const tones = {
     neutral: 'bg-ink-700/70 text-parch-300 border-ink-600',
@@ -171,7 +235,59 @@ export function Chip({
     azure: 'bg-azure-500/15 text-azure-400 border-azure-600/40',
     violet: 'bg-violet-500/15 text-violet-400 border-violet-500/40',
   };
-  return <span className={`chip border ${tones[tone]}`}>{children}</span>;
+  return (
+    <span className={`chip border ${tones[tone]}`} title={title}>
+      {children}
+    </span>
+  );
+}
+
+/** Accessible on/off switch. */
+export function Switch({
+  checked,
+  onChange,
+  label,
+  description,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  label: string;
+  description?: string;
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      onClick={() => onChange(!checked)}
+      className={`group flex items-center gap-2.5 rounded-lg border px-2.5 py-1.5 transition-colors ${
+        checked
+          ? 'border-gold-600/50 bg-gold-500/12'
+          : 'border-ink-700 bg-ink-900 hover:border-ink-600'
+      }`}
+      title={description ?? label}
+    >
+      <span
+        aria-hidden
+        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors ${
+          checked ? 'bg-gold-500' : 'bg-ink-600'
+        }`}
+      >
+        <span
+          className={`absolute h-3.5 w-3.5 rounded-full bg-ink-950 transition-transform ${
+            checked ? 'translate-x-[1.15rem]' : 'translate-x-0.5'
+          }`}
+        />
+      </span>
+      <span
+        className={`whitespace-nowrap text-xs font-semibold ${
+          checked ? 'text-gold-300' : 'text-parch-400'
+        }`}
+      >
+        {label}
+      </span>
+    </button>
+  );
 }
 
 export function Panel({

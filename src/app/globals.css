@@ -21,7 +21,9 @@
   --color-gold-600: #b3802a;
 
   --color-parch-100: #f3f0e8;
+  --color-parch-200: #dcdfe8;
   --color-parch-300: #c9cfdd;
+  --color-parch-400: #a8b1c5;
   --color-parch-500: #8b95ad;
   --color-parch-600: #6b7690;
 
@@ -232,6 +234,50 @@
   box-shadow: 0 12px 30px -12px rgba(0, 0, 0, 0.9);
 }
 
+/* ---------------------------------------------------------------------------
+   Modals.
+   The panel is rendered into <body> through a React portal, so no ancestor
+   transform can ever offset it. `position: fixed` + `translate(-50%, -50%)`
+   keeps it centred in the viewport the user is currently looking at.
+--------------------------------------------------------------------------- */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.modal-panel {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 61;
+  width: 100%;
+  max-width: 36rem;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+@media (max-width: 640px) {
+  .modal-overlay {
+    padding: 0;
+    align-items: flex-end;
+  }
+  .modal-panel {
+    top: auto;
+    bottom: 0;
+    left: 50%;
+    transform: translateX(-50%);
+    max-height: 92vh;
+    border-bottom-left-radius: 0;
+    border-bottom-right-radius: 0;
+  }
+}
+
 /* Fade-in animation for panels */
 @keyframes fade-up {
   from {
@@ -243,6 +289,11 @@
     transform: translateY(0);
   }
 }
+/*
+ * `backwards` (not `both`) is deliberate: a lingering `transform` would turn
+ * the panel into the containing block for `position: fixed` descendants and
+ * silently break any modal rendered inside it.
+ */
 .animate-fade-up {
-  animation: fade-up 380ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation: fade-up 380ms cubic-bezier(0.22, 1, 0.36, 1) backwards;
 }

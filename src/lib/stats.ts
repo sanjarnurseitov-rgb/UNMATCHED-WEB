@@ -5,23 +5,40 @@
  * pre-aggregated pivot tables are trusted, because the sheet's own pivot tabs
  * had drifted out of sync with the raw match rows.
  */
-import { groupNames, identityKey } from './normalize';
-import type {
-  AppData,
-  DashboardStats,
-  DetailedRecord,
-  GameMode,
-  HeadToHead,
-  Match,
-  PairSynergy,
-  WinRecord,
-  ReferenceData,
+import { groupNames, identityKey, isHomebrew } from './normalize';
+import {
+  UNSPECIFIED_MAP,
+  type AppData,
+  type DashboardStats,
+  type DetailedRecord,
+  type GameMode,
+  type HeadToHead,
+  type HeroBreakdown,
+  type Match,
+  type PairSynergy,
+  type ReferenceData,
+  type WinRecord,
 } from './types';
 
-/** Minimum games before an entity is allowed onto a win-rate leaderboard. */
-export const MIN_GAMES_FOR_RATE = 3;
+/**
+ * Minimum games before an entity is allowed onto a win-rate leaderboard.
+ * Raised from 3 to 10 so that a 3–0 record cannot top the chart with an
+ * artificial 100 % win rate.
+ */
+export const MIN_GAMES_FOR_RATE = 10;
 /** Minimum games before a duo is allowed onto the synergy leaderboard. */
 export const MIN_GAMES_FOR_SYNERGY = 3;
+
+export interface StatsOptions {
+  /**
+   * Exclude heroes matching this predicate from every hero statistic. Matches
+   * are still counted for players, maps and the timeline — only the heroes
+   * themselves disappear. Used by the "hide fan characters" switch.
+   */
+  excludeHeroes?: (heroName: string) => boolean;
+  /** Rows that could not be parsed — passed straight through to the result. */
+  rejectedRows?: Array<{ rowNumber: number; reason: string }>;
+}
 
 interface Bucket {
   display: string;
@@ -32,6 +49,7 @@ interface Bucket {
   wins1v1: number;
   games2v2: number;
   wins2v2: number;
+  dualGames: number;
   heroes: Map<string, { display: string; games: number; wins: number }>;
   maps: Map<string, number>;
 }
@@ -46,6 +64,7 @@ function newBucket(display: string): Bucket {
     wins1v1: 0,
     games2v2: 0,
     wins2v2: 0,
+    dualGames: 0,
     heroes: new Map(),
     maps: new Map(),
   };
@@ -80,7 +99,20 @@ function winningSeats(match: Match): Set<number> {
   return seats;
 }
 
-/** The two opposing seats for a given seat, used for head-to-head counters. */
+/**
+ * Did the player occupying `seat` win?
+ *
+ * In 1v1 every seat is its own side. In 2v2 both seats of a team share the
+ * team's result, which is what makes a dual-control player (one player on
+ * both seats of a team) resolve correctly.
+ */
+function seatWon(match: Match, seat: number, winning: Set<number>): boolean {
+  if (match.mode === '1v1') return winning.has(seat);
+  const team = seat < 2 ? 1 : 2;
+  return team === 1 ? winning.has(0) : winning.has(2);
+}
+
+/** The opposing seats for a given seat, used for head-to-head counters. */
 function opponentsOf(match: Match, seat: number): number[] {
   if (match.mode === '1v1') return [seat === 0 ? 1 : 0];
   if (seat < 2) return [2, 3];
@@ -106,7 +138,20 @@ function monthLabel(key: string): string {
   return `${names[Number(month) - 1]} ${year}`;
 }
 
-export function computeStats(matches: Match[], reference: ReferenceData): DashboardStats {
+/** Battlefield bucket for a match: unnamed maps fall into "Не указано". */
+export function mapBucket(match: Match): string {
+  const map = match.map?.trim();
+  return map ? map : UNSPECIFIED_MAP;
+}
+
+export function computeStats(
+  matches: Match[],
+  reference: ReferenceData,
+  options: StatsOptions = {},
+): DashboardStats {
+  const excludeHeroes = options.excludeHeroes ?? (() => false);
+  const isHeroHidden = (hero: string) => excludeHeroes(hero);
+
   const playerBuckets = new Map<string, Bucket>();
   const heroBuckets = new Map<string, Bucket>();
   const heroPairAgg = new Map<string, { members: [string, string]; games: number; wins: number }>();
@@ -120,7 +165,7 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
   let validMatches = 0;
   let totalWins = 0;
   let totalLosses = 0;
-  let degenerateRows = 0;
+  let dualControlMatches = 0;
   const timestamps: string[] = [];
 
   const bump = (buckets: Map<string, Bucket>, name: string) => {
@@ -138,38 +183,46 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
     if (!match.valid) continue;
     validMatches += 1;
     modeCounts[match.mode] += 1;
+    if (match.dualControl.length > 0) dualControlMatches += 1;
 
-    const seats = winningSeats(match);
+    const winning = winningSeats(match);
 
-    // Historical rows sometimes list the same player in both seats of a team
-    // (3 distinct people in a "2 vs 2"). Such a player must be counted once
-    // per match, otherwise their game count and win rate are inflated.
-    const seenPlayers = new Set<string>();
-    const distinctSeats: Array<{ player: string; seat: number }> = [];
+    // Group seats by player. A dual-control player occupies two seats of the
+    // same team and must be counted exactly once per match, while still
+    // owning both of their heroes.
+    const seatGroups = new Map<string, { player: string; seats: number[]; heroes: string[] }>();
     match.players.forEach((player, seat) => {
       if (!player) return;
       const key = identityKey(player);
-      if (seenPlayers.has(key)) return;
-      seenPlayers.add(key);
-      distinctSeats.push({ player, seat });
+      let group = seatGroups.get(key);
+      if (!group) {
+        group = { player, seats: [], heroes: [] };
+        seatGroups.set(key, group);
+      }
+      group.seats.push(seat);
+      const hero = match.heroes[seat];
+      if (hero) group.heroes.push(hero);
     });
-    if (distinctSeats.length < match.players.filter(Boolean).length) {
-      degenerateRows += 1;
-    }
+    const distinctSeats = [...seatGroups.values()];
 
-    const distinctWins = distinctSeats.filter(({ seat }) => seats.has(seat)).length;
+    const distinctWins = distinctSeats.filter((g) => seatWon(match, g.seats[0], winning)).length;
     const distinctPlayers = distinctSeats.length;
     totalWins += distinctWins;
     totalLosses += distinctPlayers - distinctWins;
 
     if (match.timestamp) timestamps.push(match.timestamp);
 
+    const mapName = mapBucket(match);
+
     // ---- per-player --------------------------------------------------
-    distinctSeats.forEach(({ player, seat }) => {
+    distinctSeats.forEach((group) => {
+      const { player, seats, heroes } = group;
+      const seat = seats[0];
       const bucket = bump(playerBuckets, player);
-      const won = seats.has(seat);
+      const won = seatWon(match, seat, winning);
       bucket.games += 1;
       if (won) bucket.wins += 1;
+      if (seats.length > 1) bucket.dualGames += 1;
       if (match.mode === '1v1') {
         bucket.games1v1 += 1;
         if (won) bucket.wins1v1 += 1;
@@ -178,8 +231,9 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
         if (won) bucket.wins2v2 += 1;
       }
 
-      const hero = match.heroes[seat];
-      if (hero) {
+      // A dual-control player owns every hero they sat at.
+      for (const hero of heroes) {
+        if (isHeroHidden(hero)) continue;
         const heroKey = identityKey(hero);
         let heroStat = bucket.heroes.get(heroKey);
         if (!heroStat) {
@@ -199,9 +253,7 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
         if (won) combo.wins += 1;
       }
 
-      if (match.map) {
-        bucket.maps.set(match.map, (bucket.maps.get(match.map) ?? 0) + 1);
-      }
+      bucket.maps.set(mapName, (bucket.maps.get(mapName) ?? 0) + 1);
 
       // ---- head to head ----------------------------------------------
       for (const oppSeat of opponentsOf(match, seat)) {
@@ -218,8 +270,8 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
           winsB: 0,
         };
         existing.games += 1;
-        const playerWon = seats.has(seat);
-        const oppWon = seats.has(oppSeat);
+        const playerWon = seatWon(match, seat, winning);
+        const oppWon = seatWon(match, oppSeat, winning);
         if (playerWon && !oppWon) {
           if (existing.a === player) existing.winsA += 1;
           else existing.winsB += 1;
@@ -234,8 +286,9 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
     // ---- per-hero ----------------------------------------------------
     match.heroes.forEach((hero, seat) => {
       if (!hero) return;
+      if (isHeroHidden(hero)) return;
       const bucket = bump(heroBuckets, hero);
-      const won = seats.has(seat);
+      const won = seatWon(match, seat, winning);
       bucket.games += 1;
       if (won) bucket.wins += 1;
       if (match.mode === '1v1') {
@@ -245,9 +298,7 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
         bucket.games2v2 += 1;
         if (won) bucket.wins2v2 += 1;
       }
-      if (match.map) {
-        bucket.maps.set(match.map, (bucket.maps.get(match.map) ?? 0) + 1);
-      }
+      bucket.maps.set(mapName, (bucket.maps.get(mapName) ?? 0) + 1);
     });
 
     // ---- duos (2v2 synergy) -----------------------------------------
@@ -256,17 +307,18 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
         {
           players: match.team1Players,
           heroes: match.team1Heroes,
-          won: seats.has(0),
+          won: winning.has(0),
         },
         {
           players: match.team2Players,
           heroes: match.team2Heroes,
-          won: seats.has(2),
+          won: winning.has(2),
         },
       ];
 
       for (const team of teams) {
-        // A player cannot be their own partner — skip degenerate rows.
+        // Two seats held by the same player are not a partnership — but the
+        // two heroes they controlled DO form a valid hero duo.
         if (
           team.players.length === 2 &&
           team.players.every(Boolean) &&
@@ -281,7 +333,9 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
         if (
           team.heroes.length === 2 &&
           team.heroes.every(Boolean) &&
-          identityKey(team.heroes[0]) !== identityKey(team.heroes[1])
+          identityKey(team.heroes[0]) !== identityKey(team.heroes[1]) &&
+          !isHeroHidden(team.heroes[0]) &&
+          !isHeroHidden(team.heroes[1])
         ) {
           const { key, members } = pairKey(team.heroes[0], team.heroes[1]);
           const agg = heroPairAgg.get(key) ?? { members, games: 0, wins: 0 };
@@ -293,12 +347,12 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
     }
 
     // ---- maps ---------------------------------------------------------
-    if (match.map) {
-      const agg = mapAgg.get(match.map) ?? { games: 0, wins: 0, matches: 0 };
+    {
+      const agg = mapAgg.get(mapName) ?? { games: 0, wins: 0, matches: 0 };
       agg.matches += 1;
       agg.games += distinctPlayers;
       agg.wins += distinctWins;
-      mapAgg.set(match.map, agg);
+      mapAgg.set(mapName, agg);
     }
 
     // ---- timeline ------------------------------------------------------
@@ -333,6 +387,7 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
           games2v2: bucket.games2v2,
           wins1v1: bucket.wins1v1,
           wins2v2: bucket.wins2v2,
+          dualGames: bucket.dualGames,
           topHeroes: [...bucket.heroes.values()]
             .map((h) => ({
               name: h.display,
@@ -380,7 +435,12 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
     (a, b) => b.games - a.games || b.winRate - a.winRate,
   )[0] ?? null;
 
-  const mostPopularMapEntry = [...mapAgg.entries()].sort((a, b) => b[1].matches - a[1].matches)[0];
+  // The headline "most popular battlefield" must be a real battlefield, so the
+  // "Не указано" bucket never wins that spot. It is still listed in the full
+  // map table so no match goes unaccounted for.
+  const mostPopularMapEntry = [...mapAgg.entries()]
+    .filter(([name]) => name !== UNSPECIFIED_MAP)
+    .sort((a, b) => b[1].matches - a[1].matches)[0];
   const mostPopularMap = mostPopularMapEntry
     ? {
         name: mostPopularMapEntry[0],
@@ -402,6 +462,16 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
       winRate: agg.games > 0 ? agg.wins / agg.games : 0,
     }));
 
+  const heroBreakdown: HeroBreakdown = reference.heroes.reduce<HeroBreakdown>(
+    (acc, hero) => {
+      acc.total += 1;
+      if (hero.homebrew || isHomebrew(hero.name)) acc.homebrew += 1;
+      else acc.official += 1;
+      return acc;
+    },
+    { total: 0, official: 0, homebrew: 0 },
+  );
+
   const sortedTimestamps = timestamps.sort();
 
   return {
@@ -414,6 +484,7 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
       modes: modeCounts,
       firstMatch: sortedTimestamps[0] ?? null,
       lastMatch: sortedTimestamps[sortedTimestamps.length - 1] ?? null,
+      dualControlMatches,
     },
     players,
     heroes,
@@ -442,8 +513,8 @@ export function computeStats(matches: Match[], reference: ReferenceData): Dashbo
       .filter((h) => h.games >= 2)
       .sort((a, b) => b.games - a.games)
       .slice(0, 12),
-    degenerateRows,
-    rejectedRows: [],
+    heroBreakdown,
+    rejectedRows: options.rejectedRows ?? [],
   };
 }
 
@@ -482,7 +553,7 @@ export function buildReference(
   const heroes = [...heroGroups.values()]
     .map((g) => ({
       name: g.display,
-      homebrew: /\(\s*фан\s*\)/i.test(g.display),
+      homebrew: isHomebrew(g.display),
       image: images.heroes[identityKey(g.display)] ?? null,
     }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
@@ -504,7 +575,6 @@ export function buildAppData(
   rejected: Array<{ rowNumber: number; reason: string }>,
 ): AppData {
   const reference = buildReference(listRows, matches, images);
-  const stats = computeStats(matches, reference);
-  stats.rejectedRows = rejected;
+  const stats = computeStats(matches, reference, { rejectedRows: rejected });
   return { matches, reference, stats, meta };
 }

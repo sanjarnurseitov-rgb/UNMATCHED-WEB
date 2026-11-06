@@ -1,11 +1,12 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Avatar, Chip, WinRateBar, formatPct } from './ui';
 import type { DetailedRecord } from '@/lib/types';
 
 /**
- * Leaderboard table for players or heroes, with a drill-down drawer that
+ * Leaderboard table for players or heroes, with a drill-down modal that
  * shows the entry's favourite heroes / maps.
  */
 export function EntityTable({
@@ -20,6 +21,25 @@ export function EntityTable({
   const [selected, setSelected] = useState<DetailedRecord | null>(null);
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<'games' | 'winRate' | 'name'>('games');
+  const [mounted, setMounted] = useState(false);
+
+  // The modal is rendered into <body> through a portal, so it can never be
+  // offset by a transformed ancestor (the fade-up animation on the panel).
+  useEffect(() => setMounted(true), []);
+
+  useEffect(() => {
+    if (!selected) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setSelected(null);
+    };
+    document.addEventListener('keydown', onKeyDown);
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onKeyDown);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [selected]);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -50,7 +70,7 @@ export function EntityTable({
           {(
             [
               ['games', 'Игры'],
-              ['winRate', 'WR'],
+              ['winRate', 'Винрейт'],
               ['name', 'А–Я'],
             ] as const
           ).map(([key, label]) => (
@@ -87,6 +107,7 @@ export function EntityTable({
               <tr
                 key={record.name}
                 onClick={() => setSelected(record)}
+                title="Открыть подробности"
                 className="cursor-pointer border-b border-ink-800/70 transition-colors hover:bg-ink-800/40"
               >
                 <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
@@ -94,6 +115,11 @@ export function EntityTable({
                   <div className="flex items-center gap-2.5">
                     <Avatar name={record.name} image={record.image} size={30} />
                     <span className="font-medium text-parch-100">{record.name}</span>
+                    {record.dualGames > 0 ? (
+                      <Chip tone="violet" title="Матчи, где игрок вёл сразу двух героев">
+                        2 героя
+                      </Chip>
+                    ) : null}
                   </div>
                 </td>
                 <td className="py-2 pr-3 text-right tabular-nums text-parch-300">{record.games}</td>
@@ -121,14 +147,25 @@ export function EntityTable({
         </table>
       </div>
 
-      {selected ? (
-        <EntityDrawer record={selected} kind={kind} onClose={() => setSelected(null)} />
-      ) : null}
+      {mounted && selected
+        ? createPortal(
+            <EntityModal record={selected} kind={kind} onClose={() => setSelected(null)} />,
+            document.body,
+          )
+        : null}
     </>
   );
 }
 
-function EntityDrawer({
+/**
+ * Detail modal.
+ *
+ * Positioning: the backdrop covers the viewport, and the panel itself is
+ * `position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%)`
+ * so it is always centred in the viewport the user is looking at — even when
+ * the table sits far down a long page.
+ */
+function EntityModal({
   record,
   kind,
   onClose,
@@ -141,15 +178,13 @@ function EntityDrawer({
   const wr2v2 = record.games2v2 > 0 ? record.wins2v2 / record.games2v2 : null;
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 p-0 backdrop-blur-sm sm:items-center sm:p-6"
-      onClick={onClose}
-      role="dialog"
-      aria-modal="true"
-    >
+    <>
+      <div className="modal-overlay bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="panel max-h-[88vh] w-full max-w-xl overflow-y-auto rounded-b-none sm:rounded-b-2xl"
-        onClick={(e) => e.stopPropagation()}
+        className="modal-panel panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`${record.name} — подробности`}
       >
         <header className="sticky top-0 flex items-start gap-3 border-b border-ink-700 bg-ink-850/95 p-5 backdrop-blur">
           <Avatar name={record.name} image={record.image} size={52} rounded="rounded-xl" />
@@ -181,7 +216,7 @@ function EntityDrawer({
                 <span className="text-xs font-normal text-parch-500">матчей</span>
               </p>
               {wr1v1 !== null ? (
-                <p className="mt-0.5 text-xs text-gold-400">WR {formatPct(wr1v1)}</p>
+                <p className="mt-0.5 text-xs text-gold-400">Винрейт {formatPct(wr1v1)}</p>
               ) : null}
             </div>
             <div className="rounded-lg border border-ink-700 bg-ink-900 p-3">
@@ -191,10 +226,20 @@ function EntityDrawer({
                 <span className="text-xs font-normal text-parch-500">матчей</span>
               </p>
               {wr2v2 !== null ? (
-                <p className="mt-0.5 text-xs text-gold-400">WR {formatPct(wr2v2)}</p>
+                <p className="mt-0.5 text-xs text-gold-400">Винрейт {formatPct(wr2v2)}</p>
               ) : null}
             </div>
           </div>
+
+          {record.dualGames > 0 ? (
+            <div className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2.5">
+              <p className="text-xs text-violet-400">
+                В <b>{record.dualGames}</b> матчах игрок вёл сразу двух героев против двух
+                соперников. Такой матч засчитывается один раз, а оба героя засчитываются за
+                игрока.
+              </p>
+            </div>
+          ) : null}
 
           {record.topHeroes.length > 0 && kind === 'player' ? (
             <div>
@@ -236,7 +281,7 @@ function EntityDrawer({
           ) : null}
         </div>
       </div>
-    </div>
+    </>
   );
 }
 

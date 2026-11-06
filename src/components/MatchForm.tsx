@@ -159,7 +159,19 @@ export function MatchForm({ data }: { data: AppData }) {
           </Panel>
 
           {/* Seats */}
-          <Panel title="Участники" subtitle="Один и тот же герой нельзя выбрать дважды">
+          <Panel
+            title="Участники"
+            subtitle="Один и тот же герой нельзя выбрать дважды"
+          >
+            {mode === '2v2' ? (
+              <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-violet-500/35 bg-violet-500/8 px-3 py-2">
+                <Chip tone="violet">1 игрок · 2 героя</Chip>
+                <p className="text-xs text-parch-400">
+                  Если один игрок ведёт двух героев, выберите его же в обоих местах одной
+                  команды. Матч будет засчитан этому игроку один раз, а оба героя — за него.
+                </p>
+              </div>
+            ) : null}
             <div className="space-y-3">
               {Array.from({ length: seatCount }).map((_, index) => {
                 const isTeam2 = mode === '2v2' && index >= 2;

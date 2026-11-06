@@ -10,6 +10,23 @@ export type GameMode = '1v1' | '2v2';
 
 export type Winner = 'p1' | 'p2' | 't1' | 't2';
 
+/** Bucket used for matches recorded without a battlefield. */
+export const UNSPECIFIED_MAP = 'Не указано';
+
+/**
+ * A 2v2 match where a single player controls both heroes of their team and
+ * faces two different opponents. In the sheet this looks like the same player
+ * name appearing in both seats of one team.
+ */
+export interface DualControl {
+  /** The player who controlled both heroes. */
+  player: string;
+  /** Which team they played for. */
+  team: 1 | 2;
+  /** The two heroes they controlled. */
+  heroes: [string, string];
+}
+
 export interface Match {
   /** Stable id: sheet row number, e.g. "r42". */
   id: string;
@@ -38,6 +55,11 @@ export interface Match {
   valid: boolean;
   /** Human-readable reason a row was rejected (if any). */
   issues: string[];
+  /**
+   * 2v2 matches where one player controlled two heroes. Empty for 1v1 and
+   * for ordinary 2v2 matches.
+   */
+  dualControl: DualControl[];
 }
 
 export interface PlayerEntry {
@@ -78,6 +100,8 @@ export interface DetailedRecord extends WinRecord {
   games2v2: number;
   wins1v1: number;
   wins2v2: number;
+  /** Matches where this player controlled two heroes at once. */
+  dualGames: number;
   /** Top heroes for the entry, most played first. */
   topHeroes: Array<{ name: string; games: number; wins: number; winRate: number }>;
   /** Top maps for the entry, most played first. */
@@ -102,6 +126,16 @@ export interface HeadToHead {
   winsB: number;
 }
 
+/** How many heroes exist in the catalogue, split by origin. */
+export interface HeroBreakdown {
+  /** Every hero known to the app. */
+  total: number;
+  /** Heroes from the official game. */
+  official: number;
+  /** Homebrew characters, detected by the "(фан)" tag. */
+  homebrew: number;
+}
+
 export interface DashboardStats {
   totals: {
     matches: number;
@@ -112,6 +146,8 @@ export interface DashboardStats {
     modes: Record<GameMode, number>;
     firstMatch: string | null;
     lastMatch: string | null;
+    /** 2v2 matches where one player controlled two heroes. */
+    dualControlMatches: number;
   };
   players: DetailedRecord[];
   heroes: DetailedRecord[];
@@ -120,7 +156,7 @@ export interface DashboardStats {
   heroLeaders: DetailedRecord[];
   /** Hero with the highest number of games played. */
   mostPlayedHero: DetailedRecord | null;
-  /** Map used in the most matches. */
+  /** Map used in the most matches (never the "Не указано" bucket). */
   mostPopularMap: { name: string; games: number; winRate: number } | null;
   /** Per-map statistics, sorted by number of matches. */
   maps: Array<{ name: string; matches: number; games: number; wins: number; winRate: number }>;
@@ -137,11 +173,8 @@ export interface DashboardStats {
   headToHead: HeadToHead[];
   /** Rows that could not be parsed, surfaced in the UI for data hygiene. */
   rejectedRows: Array<{ rowNumber: number; reason: string }>;
-  /**
-   * Rows where the same player occupies two seats of one team. Such rows are
-   * kept (the match happened) but the player is counted only once.
-   */
-  degenerateRows: number;
+  /** Hero catalogue split into official and homebrew characters. */
+  heroBreakdown: HeroBreakdown;
 }
 
 /** Everything the client needs to render the app. */
