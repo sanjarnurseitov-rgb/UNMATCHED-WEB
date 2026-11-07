@@ -1,8 +1,6 @@
 'use client';
 
 import {
-  Area,
-  AreaChart,
   Bar,
   BarChart,
   Cell,
@@ -76,59 +74,50 @@ function DarkTooltip({
   );
 }
 
-/** Matches per month with a win/loss split. */
+/**
+ * Matches per month, split by mode.
+ *
+ * Two lines only — "1 vs 1" and "2 vs 2" — in strongly contrasting colours
+ * (azure vs gold) so the two series stay readable even on small screens.
+ */
 export function MatchesTimeline({
   data,
 }: {
-  data: Array<{ month: string; matches: number; wins: number; losses: number }>;
+  data: Array<{ month: string; matches1v1: number; matches2v2: number }>;
 }) {
   if (data.length === 0) return <p className="py-8 text-center text-sm text-parch-500">Нет данных</p>;
   return (
     <ResponsiveContainer width="100%" height={280}>
-      <AreaChart data={data} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
-        <defs>
-          <linearGradient id="gWins" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={EMERALD} stopOpacity={0.75} />
-            <stop offset="100%" stopColor={EMERALD} stopOpacity={0.05} />
-          </linearGradient>
-          <linearGradient id="gMatches" x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={GOLD} stopOpacity={0.6} />
-            <stop offset="100%" stopColor={GOLD} stopOpacity={0.05} />
-          </linearGradient>
-        </defs>
+      <LineChart data={data} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
         <XAxis dataKey="month" tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={24} />
         <YAxis tickLine={false} axisLine={false} allowDecimals={false} />
-        <Tooltip content={<DarkTooltip />} />
+        <Tooltip
+          content={<DarkTooltip format={(value, name) => `${value} ${name === '1 vs 1' ? 'матч. 1x1' : 'матч. 2x2'}`} />}
+          cursor={{ stroke: 'rgba(217,160,60,0.25)' }}
+        />
         <Legend
           iconType="circle"
           wrapperStyle={{ fontSize: 11, color: 'var(--color-parch-500)', paddingTop: 6 }}
         />
-        <Area
+        <Line
           type="monotone"
-          dataKey="matches"
-          name="Матчей"
-          stroke={GOLD}
-          strokeWidth={2}
-          fill="url(#gMatches)"
-        />
-        <Area
-          type="monotone"
-          dataKey="wins"
-          name="Побед (игроков)"
-          stroke={EMERALD}
-          strokeWidth={2}
-          fill="url(#gWins)"
+          dataKey="matches1v1"
+          name="1 vs 1"
+          stroke={AZURE}
+          strokeWidth={2.5}
+          dot={{ r: 2, fill: AZURE, strokeWidth: 0 }}
+          activeDot={{ r: 4 }}
         />
         <Line
           type="monotone"
-          dataKey="losses"
-          name="Поражений (игроков)"
-          stroke={CRIMSON}
-          strokeWidth={2}
-          strokeDasharray="4 3"
-          dot={false}
+          dataKey="matches2v2"
+          name="2 vs 2"
+          stroke={GOLD}
+          strokeWidth={2.5}
+          dot={{ r: 2, fill: GOLD, strokeWidth: 0 }}
+          activeDot={{ r: 4 }}
         />
-      </AreaChart>
+      </LineChart>
     </ResponsiveContainer>
   );
 }

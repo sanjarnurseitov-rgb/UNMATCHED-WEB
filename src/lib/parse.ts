@@ -15,6 +15,17 @@ export const MATCH_COLUMNS = {
   h1: 3,
   p2: 4,
   h2: 5,
+  /**
+   * Column G — "Поле 1 vs 1".
+   *
+   * The battlefield of a 1 vs 1 match lives in column G (the 2 vs 2
+   * battlefield lives in column K). This has always been read here; what was
+   * broken upstream was the *dropdown* — the hand-maintained `PlayerList`
+   * column J did not list every battlefield that actually appears in 1 vs 1
+   * matches, so most of them could not be picked. The reference list is now
+   * the union of the PlayerList columns and every battlefield found in the
+   * match history (see `buildReference`).
+   */
   map1v1: 6,
   winner1v1: 7,
   comment1v1: 8,

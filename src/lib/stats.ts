@@ -5,27 +5,36 @@
  * pre-aggregated pivot tables are trusted, because the sheet's own pivot tabs
  * had drifted out of sync with the raw match rows.
  */
-import { groupNames, identityKey, isHomebrew } from './normalize';
 import {
-  UNSPECIFIED_MAP,
-  type AppData,
-  type DashboardStats,
-  type DetailedRecord,
-  type GameMode,
-  type HeadToHead,
-  type HeroBreakdown,
-  type Match,
-  type PairSynergy,
-  type ReferenceData,
-  type WinRecord,
+  groupNames,
+  identityKey,
+  isExcludedHero,
+  isHomebrew,
+  isPlaceholder,
+  isUnknownMap,
+  mapKey,
+  pickDisplayName,
+} from './normalize';
+import type {
+  AppData,
+  DashboardStats,
+  DetailedRecord,
+  GameMode,
+  HeadToHead,
+  HeroBreakdown,
+  MapStats,
+  Match,
+  PairSynergy,
+  ReferenceData,
+  WinRecord,
 } from './types';
 
 /**
- * Minimum games before an entity is allowed onto a win-rate leaderboard.
- * Raised from 3 to 10 so that a 3–0 record cannot top the chart with an
- * artificial 100 % win rate.
+ * Minimum games before a player is allowed onto the win-rate leaderboard.
  */
-export const MIN_GAMES_FOR_RATE = 10;
+export const MIN_GAMES_FOR_PLAYER_RATE = 20;
+/** Minimum games before a hero is allowed onto the win-rate leaderboard. */
+export const MIN_GAMES_FOR_HERO_RATE = 10;
 /** Minimum games before a duo is allowed onto the synergy leaderboard. */
 export const MIN_GAMES_FOR_SYNERGY = 3;
 
@@ -138,10 +147,27 @@ function monthLabel(key: string): string {
   return `${names[Number(month) - 1]} ${year}`;
 }
 
-/** Battlefield bucket for a match: unnamed maps fall into "Не указано". */
-export function mapBucket(match: Match): string {
+/**
+ * Battlefield bucket for a match.
+ *
+ * Returns `null` when the match has no usable battlefield: an empty cell, or
+ * a placeholder such as "Неизвестно". Unknown battlefields are counted
+ * separately and never enter the map ratings or charts — otherwise they
+ * would outrank every real battlefield.
+ */
+export function mapBucket(match: Match): string | null {
   const map = match.map?.trim();
-  return map ? map : UNSPECIFIED_MAP;
+  if (!map) return null;
+  if (isUnknownMap(map)) return null;
+  return map;
+}
+
+interface MapAggregate {
+  games: number;
+  wins: number;
+  matches: number;
+  heroes: Map<string, { display: string; games: number }>;
+  players: Map<string, { display: string; wins: number; games: number }>;
 }
 
 export function computeStats(
@@ -150,7 +176,8 @@ export function computeStats(
   options: StatsOptions = {},
 ): DashboardStats {
   const excludeHeroes = options.excludeHeroes ?? (() => false);
-  const isHeroHidden = (hero: string) => excludeHeroes(hero);
+  const isHeroHidden = (hero: string) =>
+    excludeHeroes(hero) || isExcludedHero(hero) || isPlaceholder(hero);
 
   const playerBuckets = new Map<string, Bucket>();
   const heroBuckets = new Map<string, Bucket>();
@@ -158,14 +185,18 @@ export function computeStats(
   const playerPairAgg = new Map<string, { members: [string, string]; games: number; wins: number }>();
   const comboAgg = new Map<string, { player: string; hero: string; games: number; wins: number }>();
   const h2h = new Map<string, HeadToHead>();
-  const timelineAgg = new Map<string, { matches: number; wins: number; losses: number }>();
-  const mapAgg = new Map<string, { games: number; wins: number; matches: number }>();
+  const timelineAgg = new Map<
+    string,
+    { matches: number; matches1v1: number; matches2v2: number; wins: number; losses: number }
+  >();
+  const mapAgg = new Map<string, MapAggregate>();
   const modeCounts: Record<GameMode, number> = { '1v1': 0, '2v2': 0 };
 
   let validMatches = 0;
   let totalWins = 0;
   let totalLosses = 0;
   let dualControlMatches = 0;
+  let unmappedMatches = 0;
   const timestamps: string[] = [];
 
   const bump = (buckets: Map<string, Bucket>, name: string) => {
@@ -193,6 +224,8 @@ export function computeStats(
     const seatGroups = new Map<string, { player: string; seats: number[]; heroes: string[] }>();
     match.players.forEach((player, seat) => {
       if (!player) return;
+      // Placeholders such as "Неизвестно" are not players.
+      if (isPlaceholder(player)) return;
       const key = identityKey(player);
       let group = seatGroups.get(key);
       if (!group) {
@@ -212,7 +245,9 @@ export function computeStats(
 
     if (match.timestamp) timestamps.push(match.timestamp);
 
+    // Battlefield. Unknown / unnamed maps are counted but never rated.
     const mapName = mapBucket(match);
+    if (!mapName) unmappedMatches += 1;
 
     // ---- per-player --------------------------------------------------
     distinctSeats.forEach((group) => {
@@ -253,12 +288,15 @@ export function computeStats(
         if (won) combo.wins += 1;
       }
 
-      bucket.maps.set(mapName, (bucket.maps.get(mapName) ?? 0) + 1);
+      if (mapName) {
+        bucket.maps.set(mapName, (bucket.maps.get(mapName) ?? 0) + 1);
+      }
 
       // ---- head to head ----------------------------------------------
       for (const oppSeat of opponentsOf(match, seat)) {
         const opp = match.players[oppSeat];
         if (!opp) continue;
+        if (isPlaceholder(opp)) continue;
         // A player cannot play against themselves.
         if (identityKey(opp) === identityKey(player)) continue;
         const { key, members } = pairKey(player, opp);
@@ -298,7 +336,6 @@ export function computeStats(
         bucket.games2v2 += 1;
         if (won) bucket.wins2v2 += 1;
       }
-      bucket.maps.set(mapName, (bucket.maps.get(mapName) ?? 0) + 1);
     });
 
     // ---- duos (2v2 synergy) -----------------------------------------
@@ -346,20 +383,60 @@ export function computeStats(
       }
     }
 
-    // ---- maps ---------------------------------------------------------
-    {
-      const agg = mapAgg.get(mapName) ?? { games: 0, wins: 0, matches: 0 };
+    // ---- battlefields -------------------------------------------------
+    if (mapName) {
+      const key = mapKey(mapName);
+      let agg = mapAgg.get(key);
+      if (!agg) {
+        agg = {
+          games: 0,
+          wins: 0,
+          matches: 0,
+          heroes: new Map(),
+          players: new Map(),
+        };
+        mapAgg.set(key, agg);
+      }
       agg.matches += 1;
       agg.games += distinctPlayers;
       agg.wins += distinctWins;
-      mapAgg.set(mapName, agg);
+
+      // Hero played most often on this battlefield.
+      match.heroes.forEach((hero) => {
+        if (!hero || isHeroHidden(hero)) return;
+        const heroKey = identityKey(hero);
+        const entry = agg.heroes.get(heroKey) ?? { display: hero, games: 0 };
+        entry.games += 1;
+        agg.heroes.set(heroKey, entry);
+      });
+
+      // Player who won most often on this battlefield.
+      distinctSeats.forEach((group) => {
+        const playerKey = identityKey(group.player);
+        const entry = agg.players.get(playerKey) ?? {
+          display: group.player,
+          wins: 0,
+          games: 0,
+        };
+        entry.games += 1;
+        if (seatWon(match, group.seats[0], winning)) entry.wins += 1;
+        agg.players.set(playerKey, entry);
+      });
     }
 
     // ---- timeline ------------------------------------------------------
     if (match.timestamp) {
       const key = monthKey(match.timestamp);
-      const agg = timelineAgg.get(key) ?? { matches: 0, wins: 0, losses: 0 };
+      const agg = timelineAgg.get(key) ?? {
+        matches: 0,
+        matches1v1: 0,
+        matches2v2: 0,
+        wins: 0,
+        losses: 0,
+      };
       agg.matches += 1;
+      if (match.mode === '1v1') agg.matches1v1 += 1;
+      else agg.matches2v2 += 1;
       agg.wins += distinctWins;
       agg.losses += distinctPlayers - distinctWins;
       timelineAgg.set(key, agg);
@@ -379,6 +456,8 @@ export function computeStats(
     [...buckets.values()]
       .map((bucket) => {
         const base = toRecord(bucket);
+        const losses1v1 = bucket.games1v1 - bucket.wins1v1;
+        const losses2v2 = bucket.games2v2 - bucket.wins2v2;
         return {
           name: bucket.display,
           image: images.get(identityKey(bucket.display)) ?? null,
@@ -387,6 +466,10 @@ export function computeStats(
           games2v2: bucket.games2v2,
           wins1v1: bucket.wins1v1,
           wins2v2: bucket.wins2v2,
+          losses1v1,
+          losses2v2,
+          winRate1v1: bucket.games1v1 > 0 ? bucket.wins1v1 / bucket.games1v1 : 0,
+          winRate2v2: bucket.games2v2 > 0 ? bucket.wins2v2 / bucket.games2v2 : 0,
           dualGames: bucket.dualGames,
           topHeroes: [...bucket.heroes.values()]
             .map((h) => ({
@@ -408,9 +491,9 @@ export function computeStats(
   const players = buildRecords(playerBuckets, playerImages);
   const heroes = buildRecords(heroBuckets, heroImages);
 
-  const rateSorted = (list: DetailedRecord[]) =>
+  const rateSorted = (list: DetailedRecord[], minGames: number) =>
     [...list]
-      .filter((r) => r.games >= MIN_GAMES_FOR_RATE)
+      .filter((r) => r.games >= minGames)
       .sort((a, b) => b.winRate - a.winRate || b.games - a.games);
 
   const buildPairs = (
@@ -435,32 +518,69 @@ export function computeStats(
     (a, b) => b.games - a.games || b.winRate - a.winRate,
   )[0] ?? null;
 
-  // The headline "most popular battlefield" must be a real battlefield, so the
-  // "Не указано" bucket never wins that spot. It is still listed in the full
-  // map table so no match goes unaccounted for.
-  const mostPopularMapEntry = [...mapAgg.entries()]
-    .filter(([name]) => name !== UNSPECIFIED_MAP)
-    .sort((a, b) => b[1].matches - a[1].matches)[0];
-  const mostPopularMap = mostPopularMapEntry
-    ? {
-        name: mostPopularMapEntry[0],
-        games: mostPopularMapEntry[1].matches,
-        winRate:
-          mostPopularMapEntry[1].games > 0
-            ? mostPopularMapEntry[1].wins / mostPopularMapEntry[1].games
-            : 0,
-      }
-    : null;
-
-  const mapStats = [...mapAgg.entries()]
-    .sort((a, b) => b[1].matches - a[1].matches)
-    .map(([name, agg]) => ({
-      name,
+  // Battlefield statistics — unknown / unnamed maps never enter the ratings.
+  const mapStats: Array<MapStats & { key: string }> = [...mapAgg.entries()].map(([key, agg]) => {
+    const topHeroEntry = [...agg.heroes.values()].sort((a, b) => b.games - a.games)[0] ?? null;
+    const topHero = topHeroEntry
+      ? { name: topHeroEntry.display, games: topHeroEntry.games }
+      : null;
+    const topPlayerEntry =
+      [...agg.players.values()].sort((a, b) => b.wins - a.wins || b.games - a.games)[0] ?? null;
+    const topPlayer = topPlayerEntry
+      ? {
+          name: topPlayerEntry.display,
+          wins: topPlayerEntry.wins,
+          games: topPlayerEntry.games,
+        }
+      : null;
+    return {
+      key,
+      name: '',
       matches: agg.matches,
       games: agg.games,
       wins: agg.wins,
       winRate: agg.games > 0 ? agg.wins / agg.games : 0,
-    }));
+      topHero,
+      topPlayer,
+    };
+  });
+
+  // The display name of a battlefield is the curated `PlayerList` spelling
+  // when the battlefield also exists there, otherwise the most frequent
+  // spelling seen in the match history.
+  const historySpellings = new Map<string, string[]>();
+  for (const match of matches) {
+    const name = mapBucket(match);
+    if (!name) continue;
+    const key = mapKey(name);
+    const list = historySpellings.get(key) ?? [];
+    list.push(name);
+    historySpellings.set(key, list);
+  }
+  const referenceSpellings = new Map<string, string[]>();
+  for (const entry of reference.maps) {
+    const key = mapKey(entry.name);
+    const list = referenceSpellings.get(key) ?? [];
+    list.push(entry.name);
+    referenceSpellings.set(key, list);
+  }
+  for (const entry of mapStats) {
+    const curated = referenceSpellings.get(entry.key) ?? [];
+    entry.name =
+      curated.length > 0
+        ? pickDisplayName(curated)
+        : pickDisplayName(historySpellings.get(entry.key) ?? []);
+  }
+  mapStats.sort((a, b) => b.matches - a.matches || a.name.localeCompare(b.name, 'ru'));
+
+  const mostPopularMapEntry = mapStats[0];
+  const mostPopularMap = mostPopularMapEntry
+    ? {
+        name: mostPopularMapEntry.name,
+        games: mostPopularMapEntry.matches,
+        winRate: mostPopularMapEntry.winRate,
+      }
+    : null;
 
   const heroBreakdown: HeroBreakdown = reference.heroes.reduce<HeroBreakdown>(
     (acc, hero) => {
@@ -485,14 +605,15 @@ export function computeStats(
       firstMatch: sortedTimestamps[0] ?? null,
       lastMatch: sortedTimestamps[sortedTimestamps.length - 1] ?? null,
       dualControlMatches,
+      unmappedMatches,
     },
     players,
     heroes,
-    playerLeaders: rateSorted(players).slice(0, 10),
-    heroLeaders: rateSorted(heroes).slice(0, 10),
+    playerLeaders: rateSorted(players, MIN_GAMES_FOR_PLAYER_RATE).slice(0, 10),
+    heroLeaders: rateSorted(heroes, MIN_GAMES_FOR_HERO_RATE).slice(0, 10),
     mostPlayedHero,
     mostPopularMap,
-    maps: mapStats,
+    maps: mapStats.map(({ key: _key, ...rest }) => rest),
     bestHeroSynergy: bestHeroSynergy.slice(0, 10),
     bestPlayerSynergy: bestPlayerSynergy.slice(0, 10),
     favouriteCombos: [...comboAgg.values()]
@@ -519,12 +640,48 @@ export function computeStats(
 }
 
 /**
+ * Prefer the curated spelling from the `PlayerList` sheet over the spelling
+ * that happens to be most frequent in the match history.
+ *
+ * The sheet's own list is the one people recognise — "Миша Бонс" from column
+ * C rather than the all-caps "Миша БОНС" that a few form responses produced.
+ * Sources are tried in priority order; the first one that knows a name wins.
+ */
+function applyPreferredSpellings(
+  groups: Map<string, { display: string; raw: string[] }>,
+  sources: string[][],
+): void {
+  const resolved = new Set<string>();
+  for (const source of sources) {
+    const byKey = new Map<string, string[]>();
+    for (const name of source) {
+      const key = identityKey(name);
+      if (resolved.has(key)) continue;
+      const list = byKey.get(key) ?? [];
+      list.push(name);
+      byKey.set(key, list);
+    }
+    for (const [key, list] of byKey) {
+      const bucket = groups.get(key);
+      if (!bucket) continue;
+      bucket.display = pickDisplayName(list);
+      resolved.add(key);
+    }
+  }
+}
+
+/**
  * Build the dropdown reference lists.
  *
  * IMPORTANT: the sheet's hand-maintained `PlayerList` tab only covers 18 of
- * the 53 players and 78 of the 129 heroes that actually appear in the match
+ * the players and 78 of the heroes that actually appear in the match
  * history. The union is used, otherwise real players (and every homebrew
- * hero) would be impossible to pick.
+ * hero) would be impossible to pick. The same applies to battlefields: the
+ * reference columns are stale, so every battlefield seen in a match is added
+ * as well — including the ones only ever played in 1 vs 1.
+ *
+ * Players come strictly from column C of `PlayerList` plus the players found
+ * in the match history; placeholders such as "Неизвестно" are dropped.
  */
 export function buildReference(
   listRows: string[][],
@@ -534,14 +691,30 @@ export function buildReference(
   const column = (index: number) =>
     listRows.slice(1).map((r) => (r[index] ?? '').trim()).filter(Boolean);
 
-  const playerNames = [...column(2), ...column(1)];
-  const heroNames = [...column(3), ...column(0), ...column(5)];
+  const playerColumn = column(2); // C — СПИСОК ИГРОКОВ
+  const heroColumns = [
+    column(0), // A — полный список героев
+    column(3), // D — герои для анкеты
+    column(5), // F — фан персы игранные
+  ];
 
-  const matchPlayers = matches.flatMap((m) => m.players.filter(Boolean));
-  const matchHeroes = matches.flatMap((m) => m.heroes.filter(Boolean));
+  // --- players: column C + players seen in the match history --------------
+  const playerNames = [
+    ...playerColumn,
+    ...matches.flatMap((m) => m.players.filter(Boolean)),
+  ].filter((name) => !isPlaceholder(name));
 
-  const playerGroups = groupNames([...playerNames, ...matchPlayers]);
-  const heroGroups = groupNames([...heroNames, ...matchHeroes]);
+  // --- heroes: hero columns + heroes seen in the match history -------------
+  const heroNames = [
+    ...heroColumns.flat(),
+    ...matches.flatMap((m) => m.heroes.filter(Boolean)),
+  ].filter((name) => !isExcludedHero(name) && !isPlaceholder(name));
+
+  const playerGroups = groupNames(playerNames);
+  applyPreferredSpellings(playerGroups, [playerColumn]);
+
+  const heroGroups = groupNames(heroNames);
+  applyPreferredSpellings(heroGroups, heroColumns);
 
   const players = [...playerGroups.values()]
     .map((g) => ({
@@ -558,10 +731,42 @@ export function buildReference(
     }))
     .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
 
-  const maps = [
-    ...column(8).map((name) => ({ name, mode: '2v2' as GameMode })),
-    ...column(9).map((name) => ({ name, mode: '1v1' as GameMode })),
-  ];
+  // --- battlefields: reference columns + every battlefield seen in a match --
+  const mapModes = new Map<
+    string,
+    { spellings: string[]; curated: string[]; modes: Set<GameMode> }
+  >();
+  const addMap = (name: string, mode: GameMode, curated: boolean) => {
+    if (!name) return;
+    const key = mapKey(name);
+    if (!key) return;
+    const entry = mapModes.get(key) ?? {
+      spellings: [],
+      curated: [],
+      modes: new Set<GameMode>(),
+    };
+    if (curated) entry.curated.push(name);
+    else entry.spellings.push(name);
+    entry.modes.add(mode);
+    mapModes.set(key, entry);
+  };
+
+  column(8).forEach((name) => addMap(name, '2v2', true)); // I — Поля 2 на 2
+  column(9).forEach((name) => addMap(name, '1v1', true)); // J — Поля 1 vs 1
+  for (const match of matches) {
+    const name = mapBucket(match);
+    if (name) addMap(name, match.mode, false);
+  }
+
+  const maps: Array<{ name: string; mode: GameMode }> = [];
+  for (const entry of mapModes.values()) {
+    const display =
+      entry.curated.length > 0
+        ? pickDisplayName(entry.curated)
+        : pickDisplayName(entry.spellings);
+    for (const mode of entry.modes) maps.push({ name: display, mode });
+  }
+  maps.sort((a, b) => a.name.localeCompare(b.name, 'ru') || a.mode.localeCompare(b.mode));
 
   return { players, heroes, maps };
 }

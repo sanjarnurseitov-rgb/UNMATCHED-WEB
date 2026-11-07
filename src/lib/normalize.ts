@@ -15,6 +15,69 @@
 
 const HOMEBREW_SUFFIX = /\(\s*фан\s*\)/i;
 
+/**
+ * Values used in the sheet instead of a real name.
+ * "Неизвестно" appears in the "Игрок 2" column of a few rows where the
+ * opponent was never recorded — it is a placeholder, not a player.
+ */
+const PLACEHOLDER_VALUES = new Set([
+  'неизвестно',
+  'не известно',
+  'неизвестный',
+  'не указан',
+  'без имени',
+  'without name',
+  'withoutname',
+]);
+
+/**
+ * Heroes that were mistakenly filled in from the player column.
+ * "Титан-Гриша" is a player in the PlayerList sheet, not a character.
+ */
+const HERO_DENYLIST = new Set(['титан-гриша']);
+
+/** Battlefield names that mean "no map recorded". */
+const UNKNOWN_MAP_VALUES = new Set([
+  'неизвестно',
+  'не известно',
+  'неизвестная карта',
+  'unknown',
+  'n/a',
+]);
+
+/** True when a value is a placeholder rather than a real name. */
+export function isPlaceholder(value: string): boolean {
+  return PLACEHOLDER_VALUES.has(identityKey(value));
+}
+
+/** True when a name must never be treated as a hero. */
+export function isExcludedHero(value: string): boolean {
+  return HERO_DENYLIST.has(identityKey(value));
+}
+
+/** True when a battlefield name means "unknown". */
+export function isUnknownMap(value: string): boolean {
+  return UNKNOWN_MAP_VALUES.has(identityKey(value));
+}
+
+/**
+ * Key used to group battlefield names.
+ *
+ * Case, spaces, dashes and apostrophes are ignored so that
+ * "Marmoreal(Том 1)" and "Marmoreal(Том1)" — or "Santa's Workshop(Том 3)"
+ * and "Santa workshop(Том 3)" — count as one battlefield instead of
+ * fragmenting the map ratings.
+ */
+export function mapKey(value: string): string {
+  return canonicalName(value)
+    .toLowerCase()
+    .replace(/ё/g, 'е')
+    .replace(/\b['‘’]s\b/g, '')
+    .replace(/[-–—_/]/g, '')
+    .replace(/['‘’"`«»]/g, '')
+    .replace(/\s+/g, '');
+}
+
 /** Replace exotic dashes/hyphens and normalise whitespace. */
 export function canonicalName(input: string): string {
   return input
@@ -32,7 +95,6 @@ export function identityKey(input: string): string {
   return canonicalName(input)
     .replace(/\s*\(\s*фан\s*\)/gi, '(фан)')
     .replace(/ё/g, 'е')
-    .replace(/е/g, 'е')
     .toLowerCase();
 }
 

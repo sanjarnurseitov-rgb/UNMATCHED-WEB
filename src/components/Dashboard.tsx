@@ -17,7 +17,11 @@ import {
   formatPct,
 } from './ui';
 import { isHomebrew } from '@/lib/normalize';
-import { MIN_GAMES_FOR_RATE, computeStats } from '@/lib/stats';
+import {
+  MIN_GAMES_FOR_HERO_RATE,
+  MIN_GAMES_FOR_PLAYER_RATE,
+  computeStats,
+} from '@/lib/stats';
 import { UNSPECIFIED_MAP, type AppData, type PairSynergy } from '@/lib/types';
 
 type Tab = 'overview' | 'players' | 'heroes' | 'pairs' | 'maps';
@@ -108,6 +112,7 @@ export function Dashboard({ data }: { data: AppData }) {
           <EntityTable
             records={stats.heroes}
             kind="hero"
+            layout="split"
             emptyMessage={
               hideFan
                 ? 'Фан-персонажи скрыты — в базе не осталось героев'
@@ -308,7 +313,7 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
       <div className="grid gap-4 xl:grid-cols-3">
         <Panel
           title="Активность по месяцам"
-          subtitle="Количество матчей и разбивка побед/поражений игроков"
+          subtitle="Сколько матчей сыграно в 1 vs 1 и в 2 vs 2"
           className="xl:col-span-2"
         >
           <MatchesTimeline data={stats.timeline} />
@@ -322,7 +327,7 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel
           title="Топ героев по винрейту"
-          subtitle={`Минимум ${MIN_GAMES_FOR_RATE} матчей на героя`}
+          subtitle={`Минимум ${MIN_GAMES_FOR_HERO_RATE} матчей на героя`}
           action={<Chip tone="gold">Топ-10</Chip>}
         >
           <WinRateRanking
@@ -335,7 +340,7 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
         </Panel>
         <Panel
           title="Топ игроков по винрейту"
-          subtitle={`Минимум ${MIN_GAMES_FOR_RATE} матчей на игрока`}
+          subtitle={`Минимум ${MIN_GAMES_FOR_PLAYER_RATE} матчей на игрока`}
           action={<Chip tone="gold">Топ-10</Chip>}
         >
           <WinRateRanking
@@ -568,7 +573,7 @@ function MapsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) 
   const counts = stats.maps;
   const totalWithMap = counts.reduce((sum, c) => sum + c.matches, 0);
   const totalMatches = data.matches.filter((m) => m.valid).length;
-  const unspecified = counts.find((c) => c.name === UNSPECIFIED_MAP);
+  const unmapped = stats.totals.unmappedMatches;
 
   return (
     <div className="grid gap-4 xl:grid-cols-3">
@@ -581,47 +586,58 @@ function MapsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) 
           <EmptyState message="Ни в одном матче не указано поле боя" />
         ) : (
           <div className="-mx-1 overflow-x-auto px-1">
-            <table className="w-full min-w-[640px] border-collapse text-sm">
+            <table className="w-full min-w-[820px] border-collapse text-sm">
               <thead>
                 <tr className="border-b border-ink-700 text-left">
                   <th className="stat-label py-2 pr-3">#</th>
                   <th className="stat-label py-2 pr-3">Поле</th>
                   <th className="stat-label py-2 pr-3 text-right">Матчей</th>
                   <th className="stat-label py-2 pr-3 text-right">Доля</th>
-                  <th className="stat-label py-2 pr-3 text-right">Винрейт полей</th>
+                  <th className="stat-label py-2 pr-3 text-right">Винрейт</th>
+                  <th className="stat-label py-2 pr-3">Топ-герой</th>
+                  <th className="stat-label py-2 pr-3">Топ-победитель</th>
                 </tr>
               </thead>
               <tbody>
-                {counts.map((entry, index) => {
-                  const isUnspecified = entry.name === UNSPECIFIED_MAP;
-                  return (
-                    <tr
-                      key={entry.name}
-                      className={`border-b border-ink-800/70 ${
-                        isUnspecified ? 'bg-ink-800/25 italic' : ''
-                      }`}
-                    >
-                      <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
-                      <td className="py-2 pr-3 text-parch-100">
-                        {entry.name}
-                        {isUnspecified ? (
-                          <span className="ml-2 text-xs text-parch-600">
-                            поле не указано
+                {counts.map((entry, index) => (
+                  <tr key={entry.name} className="border-b border-ink-800/70">
+                    <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
+                    <td className="py-2 pr-3 text-parch-100">{entry.name}</td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
+                      {entry.matches}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-parch-500">
+                      {totalMatches > 0 ? formatPct(entry.matches / totalMatches, 0) : '—'}
+                    </td>
+                    <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
+                      {entry.games > 0 ? formatPct(entry.winRate) : '—'}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {entry.topHero ? (
+                        <span className="flex items-center gap-2">
+                          <Avatar name={entry.topHero.name} size={22} />
+                          <span className="text-xs text-parch-300">{entry.topHero.name}</span>
+                          <span className="text-xs text-parch-600">{entry.topHero.games}</span>
+                        </span>
+                      ) : (
+                        <span className="text-xs text-parch-600">—</span>
+                      )}
+                    </td>
+                    <td className="py-2 pr-3">
+                      {entry.topPlayer ? (
+                        <span className="flex items-center gap-2">
+                          <Avatar name={entry.topPlayer.name} size={22} />
+                          <span className="text-xs text-parch-300">{entry.topPlayer.name}</span>
+                          <span className="text-xs text-parch-600">
+                            {entry.topPlayer.wins}/{entry.topPlayer.games}
                           </span>
-                        ) : null}
-                      </td>
-                      <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
-                        {entry.matches}
-                      </td>
-                      <td className="py-2 pr-3 text-right tabular-nums text-parch-500">
-                        {totalMatches > 0 ? formatPct(entry.matches / totalMatches, 0) : '—'}
-                      </td>
-                      <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
-                        {entry.games > 0 ? formatPct(entry.winRate) : '—'}
-                      </td>
-                    </tr>
-                  );
-                })}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-parch-600">—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>
@@ -631,19 +647,17 @@ function MapsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) 
       <div className="space-y-4">
         <Panel title="Популярность" subtitle="Топ-12 полей по числу матчей">
           <VerticalBars
-            data={counts
-              .filter((c) => c.name !== UNSPECIFIED_MAP)
-              .slice(0, 12)
-              .map((c) => ({ name: c.name, value: c.matches }))}
+            data={counts.slice(0, 12).map((c) => ({ name: c.name, value: c.matches }))}
           />
         </Panel>
 
-        {unspecified ? (
-          <Panel title="Поле не указано" subtitle="Матчи без записанного поля боя">
+        {unmapped > 0 ? (
+          <Panel title="Без поля боя" subtitle="Матчи, где поле не было записано">
             <p className="text-sm text-parch-300">
-              <b className="text-gold-400">{unspecified.matches}</b> матчей были записаны без
-              выбора поля боя. Они учтены в общей статистике, но собраны в отдельной категории
-              «{UNSPECIFIED_MAP}», чтобы не искажать рейтинг полей.
+              <b className="text-gold-400">{unmapped}</b> матчей были записаны без выбора поля
+              боя. Они учтены в общей статистике, игроках, героях и активности, но{' '}
+              <b>исключены</b> из рейтинга полей и графика популярности — иначе пустая категория
+              опережала бы каждое реальное поле.
             </p>
           </Panel>
         ) : null}

@@ -100,12 +100,35 @@ export interface DetailedRecord extends WinRecord {
   games2v2: number;
   wins1v1: number;
   wins2v2: number;
+  /** Losses in 1 vs 1. */
+  losses1v1: number;
+  /** Losses in 2 vs 2. */
+  losses2v2: number;
+  /** Win rate in 1 vs 1 (0 when there were no 1 vs 1 games). */
+  winRate1v1: number;
+  /** Win rate in 2 vs 2 (0 when there were no 2 vs 2 games). */
+  winRate2v2: number;
   /** Matches where this player controlled two heroes at once. */
   dualGames: number;
   /** Top heroes for the entry, most played first. */
   topHeroes: Array<{ name: string; games: number; wins: number; winRate: number }>;
   /** Top maps for the entry, most played first. */
   topMaps: Array<{ name: string; games: number }>;
+}
+
+/** Per-battlefield statistics. */
+export interface MapStats {
+  name: string;
+  /** Number of matches played on this battlefield. */
+  matches: number;
+  /** Player-games played on this battlefield. */
+  games: number;
+  wins: number;
+  winRate: number;
+  /** Hero played most often on this battlefield. */
+  topHero: { name: string; games: number } | null;
+  /** Player who won most often on this battlefield. */
+  topPlayer: { name: string; wins: number; games: number } | null;
 }
 
 export interface PairSynergy {
@@ -148,6 +171,8 @@ export interface DashboardStats {
     lastMatch: string | null;
     /** 2v2 matches where one player controlled two heroes. */
     dualControlMatches: number;
+    /** Matches recorded without a battlefield. Excluded from map ratings. */
+    unmappedMatches: number;
   };
   players: DetailedRecord[];
   heroes: DetailedRecord[];
@@ -156,10 +181,10 @@ export interface DashboardStats {
   heroLeaders: DetailedRecord[];
   /** Hero with the highest number of games played. */
   mostPlayedHero: DetailedRecord | null;
-  /** Map used in the most matches (never the "Не указано" bucket). */
+  /** Map used in the most matches (never an unknown/unnamed battlefield). */
   mostPopularMap: { name: string; games: number; winRate: number } | null;
   /** Per-map statistics, sorted by number of matches. */
-  maps: Array<{ name: string; matches: number; games: number; wins: number; winRate: number }>;
+  maps: MapStats[];
   /** Highest win-rate hero duo in 2v2. */
   bestHeroSynergy: PairSynergy[];
   /** Highest win-rate player duo in 2v2. */
@@ -167,7 +192,14 @@ export interface DashboardStats {
   /** Most frequent player+hero pairing. */
   favouriteCombos: Array<{ player: string; hero: string; games: number; wins: number; winRate: number }>;
   /** Matches per month, for the activity chart. */
-  timeline: Array<{ month: string; matches: number; wins: number; losses: number }>;
+  timeline: Array<{
+    month: string;
+    matches: number;
+    matches1v1: number;
+    matches2v2: number;
+    wins: number;
+    losses: number;
+  }>;
   /** Games per mode over time. */
   modeSplit: Array<{ mode: GameMode; matches: number }>;
   headToHead: HeadToHead[];

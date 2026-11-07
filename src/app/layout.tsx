@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { Cinzel, Inter } from 'next/font/google';
 import Link from 'next/link';
 import { AppNav } from '@/components/AppNav';
+import { AddPlayerButton } from '@/components/AddPlayerButton';
 import './globals.css';
 
 const cinzel = Cinzel({
@@ -24,10 +25,24 @@ export const metadata: Metadata = {
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
+  /*
+   * The background artwork lives in `public/background.jpg`. It can be
+   * replaced without touching the code by pointing this variable at another
+   * URL (or at a file in `public/`).
+   */
+  const backgroundImage = process.env.NEXT_PUBLIC_BACKGROUND_IMAGE?.trim();
+
   return (
     <html lang="ru" className={`${cinzel.variable} ${inter.variable}`}>
       <body className="min-h-screen">
-        <div className="mx-auto flex min-h-screen max-w-[1600px] flex-col px-4 pb-16 sm:px-6 lg:px-8">
+        <div
+          className="app-background"
+          aria-hidden="true"
+          style={
+            backgroundImage ? { backgroundImage: `url("${backgroundImage}")` } : undefined
+          }
+        />
+        <div className="app-shell mx-auto flex min-h-screen max-w-[1600px] flex-col px-4 pb-16 sm:px-6 lg:px-8">
           <header className="sticky top-0 z-40 -mx-4 border-b border-ink-700/80 bg-ink-950/85 px-4 backdrop-blur-md sm:-mx-6 sm:px-6 lg:-mx-8 lg:px-8">
             <div className="mx-auto flex max-w-[1600px] items-center justify-between gap-4 py-3">
               <Link href="/" className="group flex shrink-0 items-center gap-2.5 sm:gap-3">
@@ -44,7 +59,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </span>
               </Link>
 
-              <AppNav />
+              <div className="flex items-center gap-2">
+                <AddPlayerButton />
+                <AppNav />
+              </div>
             </div>
           </header>
 
