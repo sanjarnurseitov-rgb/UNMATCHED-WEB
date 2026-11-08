@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar, Chip, WinRateBar, formatPct } from './ui';
+import { HeroAvatar } from './HeroModal';
 import type { DetailedRecord } from '@/lib/types';
 
 /**
@@ -95,7 +96,7 @@ export function EntityTable({
 
       <div className="-mx-1 overflow-x-auto px-1">
         {layout === 'split' ? (
-          <SplitTable filtered={filtered} onSelect={setSelected} />
+          <SplitTable filtered={filtered} kind={kind} onSelect={setSelected} />
         ) : (
           <CombinedTable filtered={filtered} kind={kind} onSelect={setSelected} />
         )}
@@ -126,9 +127,11 @@ function numCell(value: number | string, tone = 'text-parch-300') {
  */
 function SplitTable({
   filtered,
+  kind,
   onSelect,
 }: {
   filtered: DetailedRecord[];
+  kind: 'player' | 'hero';
   onSelect: (record: DetailedRecord) => void;
 }) {
   return (
@@ -176,7 +179,11 @@ function SplitTable({
             <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
             <td className="py-2 pr-3">
               <div className="flex items-center gap-2.5">
-                <Avatar name={record.name} image={record.image} size={30} />
+                {kind === 'hero' ? (
+                  <HeroAvatar name={record.name} image={record.image} size={30} />
+                ) : (
+                  <Avatar name={record.name} image={record.image} size={30} />
+                )}
                 <span className="font-medium text-parch-100">{record.name}</span>
               </div>
             </td>
@@ -252,7 +259,11 @@ function CombinedTable({
             <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
             <td className="py-2 pr-3">
               <div className="flex items-center gap-2.5">
-                <Avatar name={record.name} image={record.image} size={30} />
+                {kind === 'hero' ? (
+                  <HeroAvatar name={record.name} image={record.image} size={30} />
+                ) : (
+                  <Avatar name={record.name} image={record.image} size={30} />
+                )}
                 <span className="font-medium text-parch-100">{record.name}</span>
                 {record.dualGames > 0 ? (
                   <Chip tone="violet" title="Матчи, где игрок вёл сразу двух героев">

@@ -1,15 +1,14 @@
 /**
- * Google Sheets integration layer.
+ * Google Sheets integration layer — strictly read-only.
  *
  * Three providers are supported, selected automatically:
  *
- *   api      — googleapis + a service account. Read & write. (needs creds)
+ *   api      — googleapis + a service account. Read only. (needs creds)
  *   public   — the public CSV export endpoint. Read-only, no credentials.
  *   snapshot — a JSON snapshot bundled with the app. Offline fallback.
  *
- * The public/snapshot modes exist so the app is usable the moment it is
- * cloned: the user's sheet is shared "anyone with the link", so the dashboard
- * works immediately, and adding a service account only unlocks *writing*.
+ * The app is an analytical dashboard: it never writes back to the spreadsheet.
+ * There is no append/upsert code path here by design.
  */
 import { google, type sheets_v4 } from 'googleapis';
 import { parseCsv } from './csv';
@@ -17,7 +16,17 @@ import { parseCsv } from './csv';
 export const DEFAULT_SPREADSHEET_ID = '15IJy050me3WkkI2vYf10tMhCFCKF0dglRY_HaBF96vQ';
 export const DEFAULT_MATCHES_GID = '760832699';
 export const DEFAULT_LISTS_GID = '1236097987';
-export const DEFAULT_IMAGES_TAB = 'Images';
+
+/**
+ * Tab that stores image URLs.
+ *
+ * The sheet stores them in a tab named exactly `IMAGES` with the columns
+ * Имя | Тип | URL, where Тип is one of `hero`, `player` or `Map`. The tab may
+ * hold several such column blocks side by side (the live sheet has one block
+ * for heroes/players and a second one for the battlefields), so the parser in
+ * `src/lib/data.ts` detects the blocks from the header row.
+ */
+export const DEFAULT_IMAGES_TAB = 'IMAGES';
 
 /** Tab titles in the live sheet. */
 export const MATCHES_TAB_TITLE = 'Ответы на форму (3)';
@@ -25,19 +34,11 @@ export const LISTS_TAB_TITLE = 'PlayerList';
 
 export type SourceKind = 'api' | 'public' | 'snapshot';
 
-export interface SheetRow {
-  row: string[];
-}
-
 export interface Provider {
   kind: SourceKind;
-  canWrite: boolean;
   readMatches(): Promise<string[][]>;
   readLists(): Promise<string[][]>;
   readImages(): Promise<string[][]>;
-  appendMatch(row: string[]): Promise<void>;
-  appendListValue(tab: 'players' | 'heroes' | 'fanHeroes' | 'maps2v2' | 'maps1v1', value: string): Promise<void>;
-  upsertImage(name: string, type: 'player' | 'hero', url: string): Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -58,6 +59,10 @@ function listsGid(): string {
 
 function imagesTab(): string {
   return process.env.SHEETS_TAB_IMAGES || DEFAULT_IMAGES_TAB;
+}
+
+function imagesGid(): string | undefined {
+  return process.env.SHEETS_TAB_IMAGES_GID?.trim() || undefined;
 }
 
 function hasCredentials(): boolean {
@@ -102,36 +107,6 @@ function getSheetsClient(): sheets_v4.Sheets {
   return sheetsClient;
 }
 
-/** Resolve tab title -> sheetId using the spreadsheet metadata. */
-async function sheetIdByTitle(title: string): Promise<number> {
-  const client = getSheetsClient();
-  const res = await client.spreadsheets.get({
-    spreadsheetId: spreadsheetId(),
-    fields: 'sheets.properties',
-  });
-  const sheet = res.data.sheets?.find((s) => s.properties?.title === title);
-  if (!sheet?.properties?.sheetId) throw new Error(`Tab "${title}" not found in the spreadsheet.`);
-  return sheet.properties.sheetId;
-}
-
-/** Create a tab if it does not exist yet. */
-async function ensureTab(title: string): Promise<void> {
-  const client = getSheetsClient();
-  const res = await client.spreadsheets.get({
-    spreadsheetId: spreadsheetId(),
-    fields: 'sheets.properties',
-  });
-  const exists = res.data.sheets?.some((s) => s.properties?.title === title);
-  if (exists) return;
-
-  await client.spreadsheets.batchUpdate({
-    spreadsheetId: spreadsheetId(),
-    requestBody: {
-      requests: [{ addSheet: { properties: { title } } }],
-    },
-  });
-}
-
 async function readRange(range: string): Promise<string[][]> {
   const client = getSheetsClient();
   const res = await client.spreadsheets.values.get({
@@ -149,39 +124,54 @@ async function fetchPublicCsv(gid: string): Promise<string[][]> {
   const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId()}/export?format=csv&gid=${gid}`;
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) {
-    throw new Error(`Google Sheets CSV export failed (HTTP ${res.status}). Is the sheet shared with "anyone with the link"?`);
+    throw new Error(
+      `Google Sheets CSV export failed (HTTP ${res.status}). Is the sheet shared with "anyone with the link"?`,
+    );
   }
   return parseCsv(await res.text());
 }
 
+/**
+ * Read a tab **by name** through the gviz CSV endpoint.
+ *
+ * The plain `export?format=csv&gid=<n>` endpoint only works with a numeric
+ * gid, and the gid of the IMAGES tab is not known to the app. gviz accepts a
+ * tab name, which is exactly what is needed here.
+ */
+async function fetchPublicCsvByTabName(tab: string): Promise<string[][]> {
+  const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId()}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
+    tab,
+  )}`;
+  const res = await fetch(url, { cache: 'no-store' });
+  if (!res.ok) {
+    throw new Error(`Google Sheets CSV export for tab "${tab}" failed (HTTP ${res.status}).`);
+  }
+  const text = await res.text();
+  // gviz answers with an HTML error page when the tab does not exist.
+  if (/^\s*<(!DOCTYPE|html)/i.test(text)) {
+    throw new Error(`Tab "${tab}" is not available in the public CSV export.`);
+  }
+  return parseCsv(text);
+}
+
 export const publicProvider: Provider = {
   kind: 'public',
-  canWrite: false,
   readMatches: () => fetchPublicCsv(matchesGid()),
   readLists: () => fetchPublicCsv(listsGid()),
-  readImages: async () => {
-    // The Images tab does not exist yet -> no images.
-    return [];
-  },
-  appendMatch: async () => {
-    throw new Error(
-      'Запись недоступна: не настроена учётная запись сервиса. Добавьте GOOGLE_SERVICE_ACCOUNT_JSON в .env.local.',
-    );
-  },
-  appendListValue: async () => {
-    throw new Error(
-      'Запись недоступна: не настроена учётная запись сервиса. Добавьте GOOGLE_SERVICE_ACCOUNT_JSON в .env.local.',
-    );
-  },
-  upsertImage: async () => {
-    throw new Error(
-      'Запись недоступна: не настроена учётная запись сервиса. Добавьте GOOGLE_SERVICE_ACCOUNT_JSON в .env.local.',
-    );
+  async readImages() {
+    try {
+      const gid = imagesGid();
+      if (gid) return await fetchPublicCsv(gid);
+      return await fetchPublicCsvByTabName(imagesTab());
+    } catch {
+      // A missing IMAGES tab must never break the dashboard.
+      return [];
+    }
   },
 };
 
 // ---------------------------------------------------------------------------
-// Provider: Google Sheets API (read & write)
+// Provider: Google Sheets API (read only)
 // ---------------------------------------------------------------------------
 
 /**
@@ -190,19 +180,10 @@ export const publicProvider: Provider = {
  *   D — герои для анкеты     (heroes)
  *   F — фан персы игранные   (homebrew heroes)
  *   I — Поля 2 на 2          (2v2 maps)
- *   J — Поля 1 на 1          (1v1 maps)
+ *   J — Поля 1 vs 1          (1v1 maps)
  */
-const LIST_COLUMNS = {
-  players: 'C',
-  heroes: 'D',
-  fanHeroes: 'F',
-  maps2v2: 'I',
-  maps1v1: 'J',
-} as const;
-
 export const apiProvider: Provider = {
   kind: 'api',
-  canWrite: true,
 
   async readMatches() {
     return readRange(`'${MATCHES_TAB_TITLE}'!A1:V`);
@@ -214,64 +195,10 @@ export const apiProvider: Provider = {
 
   async readImages() {
     try {
-      await ensureTab(imagesTab());
-      return await readRange(`'${imagesTab()}'!A1:C`);
+      return await readRange(`'${imagesTab()}'!A1:Z`);
     } catch {
       return [];
     }
-  },
-
-  async appendMatch(row) {
-    const client = getSheetsClient();
-    await client.spreadsheets.values.append({
-      spreadsheetId: spreadsheetId(),
-      range: `'${MATCHES_TAB_TITLE}'!A:V`,
-      valueInputOption: 'USER_ENTERED',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: [row] },
-    });
-  },
-
-  async appendListValue(tab, value) {
-    const client = getSheetsClient();
-    const column = LIST_COLUMNS[tab];
-    const range = `'${LISTS_TAB_TITLE}'!${column}:${column}`;
-    await client.spreadsheets.values.append({
-      spreadsheetId: spreadsheetId(),
-      range,
-      valueInputOption: 'RAW',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: [[value]] },
-    });
-  },
-
-  async upsertImage(name, type, url) {
-    const client = getSheetsClient();
-    await ensureTab(imagesTab());
-    const rows = await readRange(`'${imagesTab()}'!A1:C`);
-
-    const targetIndex = rows.findIndex(
-      (r) => (r[0] ?? '').trim() === name && (r[1] ?? '').trim() === type,
-    );
-
-    if (targetIndex >= 0) {
-      const rowNumber = targetIndex + 1;
-      await client.spreadsheets.values.update({
-        spreadsheetId: spreadsheetId(),
-        range: `'${imagesTab()}'!C${rowNumber}`,
-        valueInputOption: 'RAW',
-        requestBody: { values: [[url]] },
-      });
-      return;
-    }
-
-    await client.spreadsheets.values.append({
-      spreadsheetId: spreadsheetId(),
-      range: `'${imagesTab()}'!A:C`,
-      valueInputOption: 'RAW',
-      insertDataOption: 'INSERT_ROWS',
-      requestBody: { values: [[name, type, url]] },
-    });
   },
 };
 
@@ -282,6 +209,7 @@ export const apiProvider: Provider = {
 interface Snapshot {
   matches: string[][];
   lists: string[][];
+  images?: string[][];
 }
 
 async function loadSnapshot(): Promise<Snapshot> {
@@ -291,7 +219,6 @@ async function loadSnapshot(): Promise<Snapshot> {
 
 export const snapshotProvider: Provider = {
   kind: 'snapshot',
-  canWrite: false,
   async readMatches() {
     return (await loadSnapshot()).matches;
   },
@@ -299,16 +226,7 @@ export const snapshotProvider: Provider = {
     return (await loadSnapshot()).lists;
   },
   async readImages() {
-    return [];
-  },
-  async appendMatch() {
-    throw new Error('Демо-режим: запись в таблицу отключена.');
-  },
-  async appendListValue() {
-    throw new Error('Демо-режим: запись в таблицу отключена.');
-  },
-  async upsertImage() {
-    throw new Error('Демо-режим: запись в таблицу отключена.');
+    return (await loadSnapshot()).images ?? [];
   },
 };
 
@@ -341,10 +259,6 @@ async function cached<T>(key: string, loader: () => Promise<T>): Promise<T> {
   const value = await loader();
   cache.set(key, { value, expires: Date.now() + TTL_MS });
   return value;
-}
-
-export function clearCache(): void {
-  cache.clear();
 }
 
 export function readMatchesCached(): Promise<string[][]> {

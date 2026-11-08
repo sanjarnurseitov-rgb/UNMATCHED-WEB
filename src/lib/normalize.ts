@@ -171,11 +171,3 @@ export function parseTimestamp(raw: string): string | null {
 
   return null;
 }
-
-/** Format a Date into the sheet's `dd.MM.yyyy HH:mm:ss` convention. */
-export function formatSheetDate(date: Date): string {
-  const p = (n: number) => String(n).padStart(2, '0');
-  return `${p(date.getDate())}.${p(date.getMonth() + 1)}.${date.getFullYear()} ${p(date.getHours())}:${p(date.getMinutes())}:${p(date.getSeconds())}`;
-}
-
-export { };

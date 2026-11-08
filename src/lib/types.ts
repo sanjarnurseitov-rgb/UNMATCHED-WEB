@@ -78,6 +78,8 @@ export interface HeroEntry {
 export interface MapEntry {
   name: string;
   mode: GameMode;
+  /** Battlefield artwork from the IMAGES tab, if available. */
+  image?: string | null;
 }
 
 export interface ReferenceData {
@@ -119,16 +121,93 @@ export interface DetailedRecord extends WinRecord {
 /** Per-battlefield statistics. */
 export interface MapStats {
   name: string;
+  /** Battlefield artwork from the IMAGES tab, if available. */
+  image?: string | null;
   /** Number of matches played on this battlefield. */
   matches: number;
   /** Player-games played on this battlefield. */
   games: number;
   wins: number;
   winRate: number;
+  /** Share of matches won by whoever had the first turn. */
+  firstTurnWinRate: number;
+  /** How balanced the battlefield is: 0 = perfectly even, 1 = one-sided. */
+  balance: number;
   /** Hero played most often on this battlefield. */
   topHero: { name: string; games: number } | null;
   /** Player who won most often on this battlefield. */
   topPlayer: { name: string; wins: number; games: number } | null;
+}
+
+/** Performance tier of a hero. */
+export type HeroTier = 'S' | 'A' | 'B' | 'C' | 'D';
+
+/** Head-to-head record of one hero against another. */
+export interface OpponentStat {
+  name: string;
+  image?: string | null;
+  games: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+}
+
+/** A 1 vs 1 hero matchup, aggregated over every meeting of the pair. */
+export interface Matchup {
+  heroA: string;
+  heroB: string;
+  games: number;
+  winsA: number;
+  winsB: number;
+  /** Win rate of heroA against heroB (0..1). */
+  winRateA: number;
+}
+
+/**
+ * Everything the hero modal needs: overall rating, the two most important
+ * opponents, the favourite battlefield and the best duo.
+ */
+export interface HeroProfile {
+  name: string;
+  image?: string | null;
+  homebrew: boolean;
+  tier: HeroTier;
+  /** Matches the hero appeared in. */
+  games: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  games1v1: number;
+  winRate1v1: number;
+  games2v2: number;
+  winRate2v2: number;
+  /** Share of all matches the hero was picked in (0..1). */
+  pickRate: number;
+  /** Hero this hero beats most often. */
+  bestVictim: OpponentStat | null;
+  /** Hero that beats this hero most often. */
+  worstEnemy: OpponentStat | null;
+  /** Battlefield this hero plays on most. */
+  favoriteMap: { name: string; games: number; image?: string | null } | null;
+  /** Teammate with the best combined win rate. */
+  bestSynergy: PairSynergy | null;
+  /** Teammate with the worst combined win rate. */
+  worstSynergy: PairSynergy | null;
+  /** Every opponent, best first. */
+  nemesis: OpponentStat[];
+  /** Every opponent, worst first. */
+  victims: OpponentStat[];
+}
+
+/** First-turn balance for one mode. */
+export interface FirstTurnBalance {
+  mode: GameMode;
+  matches: number;
+  /** Matches won by the side that moved first. */
+  firstTurnWins: number;
+  /** Matches won by the side that moved second. */
+  secondTurnWins: number;
+  firstTurnWinRate: number;
 }
 
 export interface PairSynergy {
@@ -157,6 +236,14 @@ export interface HeroBreakdown {
   official: number;
   /** Homebrew characters, detected by the "(фан)" tag. */
   homebrew: number;
+  /** Matches that featured at least one official hero. */
+  officialMatches: number;
+  /** Matches that featured at least one homebrew hero. */
+  homebrewMatches: number;
+  /** Hero slots (seats) taken by official heroes. */
+  officialSlots: number;
+  /** Hero slots (seats) taken by homebrew heroes. */
+  homebrewSlots: number;
 }
 
 export interface DashboardStats {
@@ -173,6 +260,8 @@ export interface DashboardStats {
     dualControlMatches: number;
     /** Matches recorded without a battlefield. Excluded from map ratings. */
     unmappedMatches: number;
+    /** Distinct players across the whole match history. */
+    uniquePlayers: number;
   };
   players: DetailedRecord[];
   heroes: DetailedRecord[];
@@ -189,6 +278,18 @@ export interface DashboardStats {
   bestHeroSynergy: PairSynergy[];
   /** Highest win-rate player duo in 2v2. */
   bestPlayerSynergy: PairSynergy[];
+  /** Every hero duo that met often enough to be rated, best first. */
+  heroSynergies: PairSynergy[];
+  /** Every player duo that met often enough to be rated, best first. */
+  playerSynergies: PairSynergy[];
+  /** Hero duos with the worst win rate — the anti-synergies. */
+  antiSynergies: PairSynergy[];
+  /** Every 1 vs 1 hero matchup. */
+  matchups: Matchup[];
+  /** Full profile of every hero that appeared in a match. */
+  heroProfiles: HeroProfile[];
+  /** First-turn balance per mode. */
+  firstTurn: FirstTurnBalance[];
   /** Most frequent player+hero pairing. */
   favouriteCombos: Array<{ player: string; hero: string; games: number; wins: number; winRate: number }>;
   /** Matches per month, for the activity chart. */
@@ -216,8 +317,9 @@ export interface AppData {
   stats: DashboardStats;
   meta: {
     source: 'api' | 'public' | 'snapshot';
-    canWrite: boolean;
     spreadsheetId: string;
     fetchedAt: string;
+    /** Number of image rows read from the IMAGES tab. */
+    imageRows: number;
   };
 }

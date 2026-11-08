@@ -4,6 +4,10 @@
  * Everything on the dashboard is derived from the normalized match list — no
  * pre-aggregated pivot tables are trusted, because the sheet's own pivot tabs
  * had drifted out of sync with the raw match rows.
+ *
+ * The engine is a pure function of (matches, reference), which lets the UI
+ * recompute everything in the browser when a filter (e.g. "hide fan heroes")
+ * changes.
  */
 import {
   groupNames,
@@ -19,11 +23,16 @@ import type {
   AppData,
   DashboardStats,
   DetailedRecord,
+  FirstTurnBalance,
   GameMode,
   HeadToHead,
   HeroBreakdown,
+  HeroProfile,
+  HeroTier,
   MapStats,
   Match,
+  Matchup,
+  OpponentStat,
   PairSynergy,
   ReferenceData,
   WinRecord,
@@ -37,6 +46,10 @@ export const MIN_GAMES_FOR_PLAYER_RATE = 20;
 export const MIN_GAMES_FOR_HERO_RATE = 10;
 /** Minimum games before a duo is allowed onto the synergy leaderboard. */
 export const MIN_GAMES_FOR_SYNERGY = 3;
+/** Minimum games before a hero gets a tier and enters the tier list. */
+export const MIN_GAMES_FOR_TIER = 5;
+/** Minimum games before a matchup counts towards the nemesis statistics. */
+export const MIN_GAMES_FOR_NEMESIS = 2;
 
 export interface StatsOptions {
   /**
@@ -47,6 +60,13 @@ export interface StatsOptions {
   excludeHeroes?: (heroName: string) => boolean;
   /** Rows that could not be parsed — passed straight through to the result. */
   rejectedRows?: Array<{ rowNumber: number; reason: string }>;
+}
+
+/** Lookup maps for the artwork stored in the IMAGES tab. */
+export interface ImageIndex {
+  players: Record<string, string>;
+  heroes: Record<string, string>;
+  maps: Record<string, string>;
 }
 
 interface Bucket {
@@ -121,6 +141,16 @@ function seatWon(match: Match, seat: number, winning: Set<number>): boolean {
   return team === 1 ? winning.has(0) : winning.has(2);
 }
 
+/**
+ * The side that moved first.
+ *
+ * The sheet has no explicit "first turn" column, so — as documented — Player 1
+ * (1 vs 1) and Team 1 (2 vs 2) are assumed to have the first turn.
+ */
+function firstTurnWon(match: Match, winning: Set<number>): boolean {
+  return match.mode === '1v1' ? winning.has(0) : winning.has(0);
+}
+
 /** The opposing seats for a given seat, used for head-to-head counters. */
 function opponentsOf(match: Match, seat: number): number[] {
   if (match.mode === '1v1') return [seat === 0 ? 1 : 0];
@@ -162,12 +192,34 @@ export function mapBucket(match: Match): string | null {
   return map;
 }
 
+/**
+ * Assign a performance tier from the win rate.
+ *
+ * The cut points are absolute so the tier list stays comparable over time
+ * instead of being re-normalised whenever a new hero is added.
+ */
+export function tierFor(winRate: number, games: number): HeroTier {
+  if (games < MIN_GAMES_FOR_TIER) return 'C';
+  if (winRate >= 0.6) return 'S';
+  if (winRate >= 0.55) return 'A';
+  if (winRate >= 0.5) return 'B';
+  if (winRate >= 0.45) return 'C';
+  return 'D';
+}
+
 interface MapAggregate {
   games: number;
   wins: number;
   matches: number;
+  firstTurnWins: number;
   heroes: Map<string, { display: string; games: number }>;
   players: Map<string, { display: string; wins: number; games: number }>;
+}
+
+interface MatchupAggregate {
+  members: [string, string];
+  games: number;
+  winsByHero: Map<string, number>;
 }
 
 export function computeStats(
@@ -190,6 +242,11 @@ export function computeStats(
     { matches: number; matches1v1: number; matches2v2: number; wins: number; losses: number }
   >();
   const mapAgg = new Map<string, MapAggregate>();
+  const matchupAgg = new Map<string, MatchupAggregate>();
+  const firstTurnAgg: Record<GameMode, { matches: number; first: number; second: number }> = {
+    '1v1': { matches: 0, first: 0, second: 0 },
+    '2v2': { matches: 0, first: 0, second: 0 },
+  };
   const modeCounts: Record<GameMode, number> = { '1v1': 0, '2v2': 0 };
 
   let validMatches = 0;
@@ -197,6 +254,10 @@ export function computeStats(
   let totalLosses = 0;
   let dualControlMatches = 0;
   let unmappedMatches = 0;
+  let officialMatches = 0;
+  let homebrewMatches = 0;
+  let officialSlots = 0;
+  let homebrewSlots = 0;
   const timestamps: string[] = [];
 
   const bump = (buckets: Map<string, Bucket>, name: string) => {
@@ -248,6 +309,32 @@ export function computeStats(
     // Battlefield. Unknown / unnamed maps are counted but never rated.
     const mapName = mapBucket(match);
     if (!mapName) unmappedMatches += 1;
+
+    // First turn (Player 1 / Team 1 is assumed to move first).
+    if (match.winner) {
+      const turn = firstTurnAgg[match.mode];
+      turn.matches += 1;
+      if (firstTurnWon(match, winning)) turn.first += 1;
+      else turn.second += 1;
+    }
+
+    // Official vs homebrew heroes — independent of the "hide fan heroes"
+    // switch, so the catalogue breakdown stays stable.
+    let hasOfficial = false;
+    let hasHomebrew = false;
+    for (const hero of match.heroes) {
+      if (!hero) continue;
+      if (isExcludedHero(hero) || isPlaceholder(hero)) continue;
+      if (isHomebrew(hero)) {
+        hasHomebrew = true;
+        homebrewSlots += 1;
+      } else {
+        hasOfficial = true;
+        officialSlots += 1;
+      }
+    }
+    if (hasOfficial) officialMatches += 1;
+    if (hasHomebrew) homebrewMatches += 1;
 
     // ---- per-player --------------------------------------------------
     distinctSeats.forEach((group) => {
@@ -329,6 +416,10 @@ export function computeStats(
       const won = seatWon(match, seat, winning);
       bucket.games += 1;
       if (won) bucket.wins += 1;
+      // Battlefields the hero played on — used for "favourite map".
+      if (mapName) {
+        bucket.maps.set(mapName, (bucket.maps.get(mapName) ?? 0) + 1);
+      }
       if (match.mode === '1v1') {
         bucket.games1v1 += 1;
         if (won) bucket.wins1v1 += 1;
@@ -337,6 +428,27 @@ export function computeStats(
         if (won) bucket.wins2v2 += 1;
       }
     });
+
+    // ---- 1 vs 1 hero matchups ----------------------------------------
+    if (match.mode === '1v1') {
+      const heroA = match.heroes[0];
+      const heroB = match.heroes[1];
+      if (heroA && heroB && !isHeroHidden(heroA) && !isHeroHidden(heroB)) {
+        const { key, members } = pairKey(heroA, heroB);
+        const agg = matchupAgg.get(key) ?? {
+          members,
+          games: 0,
+          winsByHero: new Map<string, number>(),
+        };
+        agg.games += 1;
+        const winnerHero = match.winner === 'p1' ? heroA : match.winner === 'p2' ? heroB : null;
+        if (winnerHero) {
+          const winnerKey = identityKey(winnerHero);
+          agg.winsByHero.set(winnerKey, (agg.winsByHero.get(winnerKey) ?? 0) + 1);
+        }
+        matchupAgg.set(key, agg);
+      }
+    }
 
     // ---- duos (2v2 synergy) -----------------------------------------
     if (match.mode === '2v2') {
@@ -392,6 +504,7 @@ export function computeStats(
           games: 0,
           wins: 0,
           matches: 0,
+          firstTurnWins: 0,
           heroes: new Map(),
           players: new Map(),
         };
@@ -400,6 +513,7 @@ export function computeStats(
       agg.matches += 1;
       agg.games += distinctPlayers;
       agg.wins += distinctWins;
+      if (match.winner && firstTurnWon(match, winning)) agg.firstTurnWins += 1;
 
       // Hero played most often on this battlefield.
       match.heroes.forEach((hero) => {
@@ -448,6 +562,7 @@ export function computeStats(
   // ------------------------------------------------------------------
   const playerImages = new Map(reference.players.map((p) => [identityKey(p.name), p.image ?? null]));
   const heroImages = new Map(reference.heroes.map((h) => [identityKey(h.name), h.image ?? null]));
+  const mapImages = new Map(reference.maps.map((m) => [mapKey(m.name), m.image ?? null]));
 
   const buildRecords = (
     buckets: Map<string, Bucket>,
@@ -511,14 +626,56 @@ export function computeStats(
       }))
       .sort((a, b) => b.winRate - a.winRate || b.games - a.games);
 
-  const bestHeroSynergy = buildPairs(heroPairAgg);
-  const bestPlayerSynergy = buildPairs(playerPairAgg);
+  const heroSynergies = buildPairs(heroPairAgg);
+  const playerSynergies = buildPairs(playerPairAgg);
+  const bestHeroSynergy = heroSynergies.slice(0, 10);
+  const bestPlayerSynergy = playerSynergies.slice(0, 10);
+  const antiSynergies = [...heroSynergies].reverse().slice(0, 12);
 
   const mostPlayedHero = [...heroes].sort(
     (a, b) => b.games - a.games || b.winRate - a.winRate,
   )[0] ?? null;
 
+  // ------------------------------------------------------------------
+  // 1 vs 1 matchups and the nemesis / victim statistics.
+  // ------------------------------------------------------------------
+  const matchups: Matchup[] = [...matchupAgg.values()]
+    .map((agg) => {
+      const winsA = agg.winsByHero.get(identityKey(agg.members[0])) ?? 0;
+      const winsB = agg.winsByHero.get(identityKey(agg.members[1])) ?? 0;
+      return {
+        heroA: agg.members[0],
+        heroB: agg.members[1],
+        games: agg.games,
+        winsA,
+        winsB,
+        winRateA: agg.games > 0 ? winsA / agg.games : 0,
+      };
+    })
+    .sort((a, b) => b.games - a.games);
+
+  /** For every hero: how it fares against each opponent it has met. */
+  const opponentStats = new Map<string, OpponentStat[]>();
+  for (const matchup of matchups) {
+    const record = (hero: string, opponent: string, wins: number, games: number) => {
+      const list = opponentStats.get(identityKey(hero)) ?? [];
+      list.push({
+        name: opponent,
+        image: heroImages.get(identityKey(opponent)) ?? null,
+        games,
+        wins,
+        losses: games - wins,
+        winRate: games > 0 ? wins / games : 0,
+      });
+      opponentStats.set(identityKey(hero), list);
+    };
+    record(matchup.heroA, matchup.heroB, matchup.winsA, matchup.games);
+    record(matchup.heroB, matchup.heroA, matchup.winsB, matchup.games);
+  }
+
+  // ------------------------------------------------------------------
   // Battlefield statistics — unknown / unnamed maps never enter the ratings.
+  // ------------------------------------------------------------------
   const mapStats: Array<MapStats & { key: string }> = [...mapAgg.entries()].map(([key, agg]) => {
     const topHeroEntry = [...agg.heroes.values()].sort((a, b) => b.games - a.games)[0] ?? null;
     const topHero = topHeroEntry
@@ -533,13 +690,18 @@ export function computeStats(
           games: topPlayerEntry.games,
         }
       : null;
+    const firstTurnWinRate = agg.matches > 0 ? agg.firstTurnWins / agg.matches : 0;
     return {
       key,
       name: '',
+      image: mapImages.get(key) ?? null,
       matches: agg.matches,
       games: agg.games,
       wins: agg.wins,
       winRate: agg.games > 0 ? agg.wins / agg.games : 0,
+      firstTurnWinRate,
+      // 0 = the battlefield is perfectly even, 1 = one side always wins.
+      balance: Math.abs(firstTurnWinRate - 0.5) * 2,
       topHero,
       topPlayer,
     };
@@ -570,6 +732,7 @@ export function computeStats(
       curated.length > 0
         ? pickDisplayName(curated)
         : pickDisplayName(historySpellings.get(entry.key) ?? []);
+    if (!entry.image) entry.image = mapImages.get(entry.key) ?? null;
   }
   mapStats.sort((a, b) => b.matches - a.matches || a.name.localeCompare(b.name, 'ru'));
 
@@ -582,6 +745,69 @@ export function computeStats(
       }
     : null;
 
+  // ------------------------------------------------------------------
+  // Hero profiles — the data behind the global hero modal.
+  // ------------------------------------------------------------------
+  const heroHomebrew = new Map(reference.heroes.map((h) => [identityKey(h.name), h.homebrew]));
+  const synergiesByHero = new Map<string, PairSynergy[]>();
+  for (const pair of heroSynergies) {
+    for (const member of pair.members) {
+      const key = identityKey(member);
+      const list = synergiesByHero.get(key) ?? [];
+      list.push(pair);
+      synergiesByHero.set(key, list);
+    }
+  }
+
+  const heroProfiles: HeroProfile[] = heroes.map((hero) => {
+    const key = identityKey(hero.name);
+    const opponents = opponentStats.get(key) ?? [];
+    const rated = opponents.filter((o) => o.games >= MIN_GAMES_FOR_NEMESIS);
+    // When no opponent has a big enough sample, fall back to the most played
+    // matchup — one game is still information, it just must be labelled.
+    const maxGames = opponents.reduce((max, o) => Math.max(max, o.games), 0);
+    const pool =
+      rated.length > 0 ? rated : opponents.filter((o) => o.games === maxGames && o.games > 0);
+    const bestVictim =
+      [...pool].sort((a, b) => b.winRate - a.winRate || b.games - a.games)[0] ?? null;
+    const worstEnemy =
+      [...pool].sort((a, b) => a.winRate - b.winRate || b.games - a.games)[0] ?? null;
+    const syn = synergiesByHero.get(key) ?? [];
+    const bestSynergy = syn.length > 0 ? syn[0] : null;
+    const worstSynergy = syn.length > 0 ? syn[syn.length - 1] : null;
+    const favoriteMapEntry = hero.topMaps[0] ?? null;
+
+    return {
+      name: hero.name,
+      image: hero.image ?? null,
+      homebrew: heroHomebrew.get(key) ?? isHomebrew(hero.name),
+      tier: tierFor(hero.winRate, hero.games),
+      games: hero.games,
+      wins: hero.wins,
+      losses: hero.losses,
+      winRate: hero.winRate,
+      games1v1: hero.games1v1,
+      winRate1v1: hero.winRate1v1,
+      games2v2: hero.games2v2,
+      winRate2v2: hero.winRate2v2,
+      pickRate: validMatches > 0 ? hero.games / validMatches : 0,
+      bestVictim,
+      worstEnemy,
+      favoriteMap: favoriteMapEntry
+        ? {
+            name: pickDisplayName(referenceSpellings.get(mapKey(favoriteMapEntry.name)) ?? []) ||
+              favoriteMapEntry.name,
+            games: favoriteMapEntry.games,
+            image: mapImages.get(mapKey(favoriteMapEntry.name)) ?? null,
+          }
+        : null,
+      bestSynergy,
+      worstSynergy,
+      nemesis: [...opponents].sort((a, b) => a.winRate - b.winRate || b.games - a.games),
+      victims: [...opponents].sort((a, b) => b.winRate - a.winRate || b.games - a.games),
+    };
+  });
+
   const heroBreakdown: HeroBreakdown = reference.heroes.reduce<HeroBreakdown>(
     (acc, hero) => {
       acc.total += 1;
@@ -589,8 +815,27 @@ export function computeStats(
       else acc.official += 1;
       return acc;
     },
-    { total: 0, official: 0, homebrew: 0 },
+    {
+      total: 0,
+      official: 0,
+      homebrew: 0,
+      officialMatches,
+      homebrewMatches,
+      officialSlots,
+      homebrewSlots,
+    },
   );
+
+  const firstTurn: FirstTurnBalance[] = (['1v1', '2v2'] as GameMode[]).map((mode) => {
+    const agg = firstTurnAgg[mode];
+    return {
+      mode,
+      matches: agg.matches,
+      firstTurnWins: agg.first,
+      secondTurnWins: agg.second,
+      firstTurnWinRate: agg.matches > 0 ? agg.first / agg.matches : 0,
+    };
+  });
 
   const sortedTimestamps = timestamps.sort();
 
@@ -606,6 +851,7 @@ export function computeStats(
       lastMatch: sortedTimestamps[sortedTimestamps.length - 1] ?? null,
       dualControlMatches,
       unmappedMatches,
+      uniquePlayers: players.length,
     },
     players,
     heroes,
@@ -614,8 +860,14 @@ export function computeStats(
     mostPlayedHero,
     mostPopularMap,
     maps: mapStats.map(({ key: _key, ...rest }) => rest),
-    bestHeroSynergy: bestHeroSynergy.slice(0, 10),
-    bestPlayerSynergy: bestPlayerSynergy.slice(0, 10),
+    bestHeroSynergy,
+    bestPlayerSynergy,
+    heroSynergies,
+    playerSynergies,
+    antiSynergies,
+    matchups,
+    heroProfiles,
+    firstTurn,
     favouriteCombos: [...comboAgg.values()]
       .map((combo) => ({
         ...combo,
@@ -686,7 +938,7 @@ function applyPreferredSpellings(
 export function buildReference(
   listRows: string[][],
   matches: Match[],
-  images: { players: Record<string, string>; heroes: Record<string, string> },
+  images: ImageIndex,
 ): ReferenceData {
   const column = (index: number) =>
     listRows.slice(1).map((r) => (r[index] ?? '').trim()).filter(Boolean);
@@ -758,13 +1010,14 @@ export function buildReference(
     if (name) addMap(name, match.mode, false);
   }
 
-  const maps: Array<{ name: string; mode: GameMode }> = [];
+  const maps: Array<{ name: string; mode: GameMode; image: string | null }> = [];
   for (const entry of mapModes.values()) {
     const display =
       entry.curated.length > 0
         ? pickDisplayName(entry.curated)
         : pickDisplayName(entry.spellings);
-    for (const mode of entry.modes) maps.push({ name: display, mode });
+    const image = images.maps[mapKey(display)] ?? null;
+    for (const mode of entry.modes) maps.push({ name: display, mode, image });
   }
   maps.sort((a, b) => a.name.localeCompare(b.name, 'ru') || a.mode.localeCompare(b.mode));
 
@@ -775,7 +1028,7 @@ export function buildReference(
 export function buildAppData(
   matches: Match[],
   listRows: string[][],
-  images: { players: Record<string, string>; heroes: Record<string, string> },
+  images: ImageIndex,
   meta: AppData['meta'],
   rejected: Array<{ rowNumber: number; reason: string }>,
 ): AppData {

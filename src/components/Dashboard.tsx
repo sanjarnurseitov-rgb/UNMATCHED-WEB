@@ -3,10 +3,12 @@
 import { useMemo, useState } from 'react';
 import { MatchesTimeline, ModeSplitChart, VerticalBars, WinRateRanking } from './charts';
 import { EntityTable } from './EntityTable';
+import { HeroAvatar } from './HeroModal';
 import {
   Avatar,
   Chip,
   EmptyState,
+  MapArt,
   MiniStat,
   Panel,
   SplitBar,
@@ -36,6 +38,7 @@ const TABS: Array<{ id: Tab; label: string }> = [
 
 const AZURE = 'var(--color-azure-400)';
 const VIOLET = 'var(--color-violet-400)';
+const GOLD = 'var(--color-gold-400)';
 
 export function Dashboard({ data }: { data: AppData }) {
   const [tab, setTab] = useState<Tab>('overview');
@@ -164,15 +167,15 @@ function DashboardHeader({
           label="Скрыть фан-героев"
           description={`Скрыть ${fanCount} фан-персонажей из статистики героев`}
         />
-        <Chip tone={meta.canWrite ? 'emerald' : 'gold'}>
+        <Chip tone="gold">
           <span
             className="inline-block h-1.5 w-1.5 rounded-full"
             style={{ background: 'currentColor' }}
           />
           {sourceLabel}
         </Chip>
-        <Chip tone={meta.canWrite ? 'azure' : 'crimson'}>
-          {meta.canWrite ? '● Запись включена' : '○ Только чтение'}
+        <Chip tone="azure" title="Приложение только читает таблицу и ничего в неё не записывает">
+          ◉ Только чтение
         </Chip>
       </div>
     </div>
@@ -217,9 +220,9 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
         </StatCard>
 
         <StatCard
-          label="Сыграно партий"
-          value={stats.totals.wins + stats.totals.losses}
-          sub="матчей × игроков"
+          label="Количество уникальных игроков"
+          value={stats.totals.uniquePlayers}
+          sub="разных имён за всю историю матчей"
           accent="azure"
         />
 
@@ -247,11 +250,32 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
           value={stats.mostPlayedHero?.name ?? '—'}
           sub={
             stats.mostPlayedHero
-              ? `${stats.mostPlayedHero.games} игр · винрейт ${formatPct(stats.mostPlayedHero.winRate)}`
+              ? `1v1: ${stats.mostPlayedHero.games1v1} игр (${formatPct(
+                  stats.mostPlayedHero.winRate1v1,
+                )}) | 2v2: ${stats.mostPlayedHero.games2v2} игр (${formatPct(
+                  stats.mostPlayedHero.winRate2v2,
+                )})`
               : undefined
           }
           accent="violet"
-        />
+        >
+          {stats.mostPlayedHero ? (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <ModeSplit
+                label="1 vs 1"
+                games={stats.mostPlayedHero.games1v1}
+                winRate={stats.mostPlayedHero.winRate1v1}
+                color={AZURE}
+              />
+              <ModeSplit
+                label="2 vs 2"
+                games={stats.mostPlayedHero.games2v2}
+                winRate={stats.mostPlayedHero.winRate2v2}
+                color={GOLD}
+              />
+            </div>
+          ) : null}
+        </StatCard>
 
         <StatCard
           label="Самое популярное поле"
@@ -268,17 +292,35 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
           accent="gold"
           className="xl:col-span-2"
         >
-          <div className="mt-2 space-y-1">
-            <MiniStat label="Официальные" value={stats.heroBreakdown.official} />
-            <MiniStat
-              label="Фан-персонажи"
-              value={stats.heroBreakdown.homebrew}
-              tone="text-violet-400"
-              hint="Персонажи с пометкой «(фан)»"
-            />
+          <div className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-2">
+            <div className="space-y-1">
+              <MiniStat label="Официальные" value={stats.heroBreakdown.official} />
+              <MiniStat
+                label="Матчей с официальными"
+                value={stats.heroBreakdown.officialMatches}
+                tone="text-azure-400"
+                hint="Матчи, где участвовал хотя бы один официальный герой"
+              />
+            </div>
+            <div className="space-y-1">
+              <MiniStat
+                label="Фан-персонажи"
+                value={stats.heroBreakdown.homebrew}
+                tone="text-violet-400"
+                hint="Персонажи с пометкой «(фан)»"
+              />
+              <MiniStat
+                label="Матчей с фан-героями"
+                value={stats.heroBreakdown.homebrewMatches}
+                tone="text-violet-400"
+                hint="Матчи, где участвовал хотя бы один фан-герой"
+              />
+            </div>
           </div>
         </StatCard>
       </div>
+
+      <TopMapsSection stats={stats} />
 
       {stats.totals.dualControlMatches > 0 ? (
         <div className="flex flex-wrap items-center gap-3 rounded-xl border border-violet-500/35 bg-violet-500/8 px-4 py-3">
@@ -372,6 +414,108 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
   );
 }
 
+/** One mode block inside a stat card: games + win rate for 1 vs 1 or 2 vs 2. */
+function ModeSplit({
+  label,
+  games,
+  winRate,
+  color,
+}: {
+  label: string;
+  games: number;
+  winRate: number;
+  color: string;
+}) {
+  return (
+    <div className="rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-2">
+      <p className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase tracking-wide text-parch-500">
+        <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: color }} />
+        {label}
+      </p>
+      <p className="mt-0.5 text-sm font-bold tabular-nums text-parch-100">{games} игр</p>
+      <p className="text-xs tabular-nums" style={{ color }}>
+        винрейт {formatPct(winRate)}
+      </p>
+    </div>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Top 3 battlefields of all time.
+ *
+ * The artwork comes from the IMAGES tab (Тип = "Map"). Battlefields without a
+ * picture yet fall back to a generated gradient, so the block never looks
+ * empty and starts showing the real board as soon as the URL is added.
+ */
+function TopMapsSection({ stats }: { stats: AppData['stats'] }) {
+  const top = stats.maps.slice(0, 3);
+  if (top.length === 0) return null;
+
+  return (
+    <Panel
+      title="Топ-3 поля за всю историю"
+      subtitle="Самые сыгранные поля боя — картинки берутся из вкладки IMAGES"
+      action={<Chip tone="gold">Все годы</Chip>}
+    >
+      <div className="grid gap-4 md:grid-cols-3">
+        {top.map((map, index) => (
+          <div
+            key={map.name}
+            className="group relative isolate flex min-h-[230px] flex-col justify-between overflow-hidden rounded-xl border border-ink-700"
+          >
+            <MapArt
+              name={map.name}
+              image={map.image}
+              position="absolute"
+              className="inset-0 -z-10 h-full w-full transition-transform duration-700 group-hover:scale-105"
+              rounded="rounded-xl"
+            />
+            <div className="absolute inset-0 -z-10 bg-gradient-to-t from-ink-950 via-ink-950/35 to-ink-950/5" />
+
+            <div className="flex items-start justify-between p-3">
+              <span className="flex h-9 w-9 items-center justify-center rounded-full border border-gold-500/50 bg-ink-950/70 font-[family-name:var(--font-display)] text-lg font-bold text-gold-300 backdrop-blur">
+                {index + 1}
+              </span>
+              <Chip tone="gold">{map.matches} матчей</Chip>
+            </div>
+
+            <div className="p-4">
+              <h3 className="text-lg font-bold leading-tight tracking-tight text-parch-100 drop-shadow">
+                {map.name}
+              </h3>
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-parch-400">
+                <span>винрейт полей {formatPct(map.winRate)}</span>
+                <span className="text-parch-600">·</span>
+                <span>первый ход {formatPct(map.firstTurnWinRate)}</span>
+              </div>
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                {map.topHero ? (
+                  <span className="flex items-center gap-1.5 rounded-full bg-ink-950/60 px-2 py-1">
+                    <Avatar name={map.topHero.name} size={18} rounded="rounded-full" />
+                    <span className="text-parch-300">{map.topHero.name}</span>
+                    <span className="text-parch-600">{map.topHero.games}</span>
+                  </span>
+                ) : null}
+                {map.topPlayer ? (
+                  <span className="flex items-center gap-1.5 rounded-full bg-ink-950/60 px-2 py-1">
+                    <Avatar name={map.topPlayer.name} size={18} rounded="rounded-full" />
+                    <span className="text-parch-300">{map.topPlayer.name}</span>
+                    <span className="text-parch-600">
+                      {map.topPlayer.wins}/{map.topPlayer.games}
+                    </span>
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </Panel>
+  );
+}
+
 /* -------------------------------------------------------------------------- */
 
 function SynergyCallout({
@@ -391,7 +535,7 @@ function SynergyCallout({
         <div className="flex items-center gap-4">
           <div className="flex -space-x-3">
             {pair.members.map((name) => (
-              <Avatar
+              <HeroAvatar
                 key={name}
                 name={name}
                 image={images[name] ?? null}
@@ -615,7 +759,7 @@ function MapsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) 
                     <td className="py-2 pr-3">
                       {entry.topHero ? (
                         <span className="flex items-center gap-2">
-                          <Avatar name={entry.topHero.name} size={22} />
+                          <HeroAvatar name={entry.topHero.name} size={22} />
                           <span className="text-xs text-parch-300">{entry.topHero.name}</span>
                           <span className="text-xs text-parch-600">{entry.topHero.games}</span>
                         </span>

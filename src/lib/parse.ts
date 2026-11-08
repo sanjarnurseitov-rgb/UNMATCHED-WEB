@@ -44,31 +44,6 @@ export const MATCH_COLUMNS = {
   location2v2: 21,
 } as const;
 
-export const MATCH_HEADERS = [
-  'Отметка времени',
-  'Режим игры',
-  'Игрок 1',
-  'Герой 1',
-  'Игрок 2',
-  'Герой 2',
-  'Поле 1 vs 1',
-  'Победитель 1 vs 1',
-  'Комментарий 1 vs 1',
-  'Локация матча 1 vs 1',
-  'Поле 2 vs 2',
-  'Команда 1 Игрок 1',
-  'Команда 1 Герой 1',
-  'Команда 1 Игрок 2',
-  'Команда 1 Герой 2',
-  'Команда 2 Игрок 3',
-  'Команда 2 Герой 3',
-  'Команда 2 Игрок 4',
-  'Команда 2 Герой 4',
-  'Победитель',
-  'Комментарий',
-  'Локация матча',
-];
-
 /** Normalised mode strings -> internal mode. */
 export function parseMode(raw: string): GameMode | null {
   const value = canonicalName(raw).toLowerCase().replace(/\s+/g, '');
@@ -245,50 +220,4 @@ export function parseMatchesSheet(rows: string[][]): {
   });
 
   return { matches, rejected };
-}
-
-/**
- * Build the row to append to the sheet for a new match.
- * Mirrors exactly how the Google Form writes, so existing pivot formulas keep
- * working and the sheet stays consistent.
- */
-export function buildSheetRow(input: {
-  mode: GameMode;
-  timestamp: string;
-  players: string[];
-  heroes: string[];
-  map?: string | null;
-  winner: 'p1' | 'p2' | 't1' | 't2';
-  comment?: string | null;
-  location?: string | null;
-}): string[] {
-  const row = new Array<string>(22).fill('');
-  row[MATCH_COLUMNS.timestamp] = input.timestamp;
-  row[MATCH_COLUMNS.mode] = input.mode === '1v1' ? '1 vs 1' : '2 vs 2';
-
-  if (input.mode === '1v1') {
-    row[MATCH_COLUMNS.p1] = input.players[0] ?? '';
-    row[MATCH_COLUMNS.h1] = input.heroes[0] ?? '';
-    row[MATCH_COLUMNS.p2] = input.players[1] ?? '';
-    row[MATCH_COLUMNS.h2] = input.heroes[1] ?? '';
-    row[MATCH_COLUMNS.map1v1] = input.map ?? '';
-    row[MATCH_COLUMNS.winner1v1] = input.winner === 'p1' ? 'Игрок 1' : 'Игрок 2';
-    row[MATCH_COLUMNS.comment1v1] = input.comment ?? '';
-    row[MATCH_COLUMNS.location1v1] = input.location ?? '';
-  } else {
-    row[MATCH_COLUMNS.map2v2] = input.map ?? '';
-    row[MATCH_COLUMNS.t1p1] = input.players[0] ?? '';
-    row[MATCH_COLUMNS.t1h1] = input.heroes[0] ?? '';
-    row[MATCH_COLUMNS.t1p2] = input.players[1] ?? '';
-    row[MATCH_COLUMNS.t1h2] = input.heroes[1] ?? '';
-    row[MATCH_COLUMNS.t2p3] = input.players[2] ?? '';
-    row[MATCH_COLUMNS.t2h3] = input.heroes[2] ?? '';
-    row[MATCH_COLUMNS.t2p4] = input.players[3] ?? '';
-    row[MATCH_COLUMNS.t2h4] = input.heroes[3] ?? '';
-    row[MATCH_COLUMNS.winner2v2] = input.winner === 't1' ? 'Команда 1' : 'Команда 2';
-    row[MATCH_COLUMNS.comment2v2] = input.comment ?? '';
-    row[MATCH_COLUMNS.location2v2] = input.location ?? '';
-  }
-
-  return row;
 }

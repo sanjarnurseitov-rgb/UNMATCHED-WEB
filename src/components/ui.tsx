@@ -76,6 +76,64 @@ export function Avatar({
 }
 
 /* ---------------------------------------------------------------------------
+   Battlefield artwork.
+
+   The IMAGES tab stores a URL for a battlefield under Тип = "Map". When a
+   battlefield has no artwork yet, a deterministic layered gradient is drawn
+   from the name so the tile still looks designed instead of empty — and it
+   switches to the real picture as soon as the URL is added to the sheet.
+--------------------------------------------------------------------------- */
+
+export function MapArt({
+  name,
+  image,
+  className = '',
+  rounded = 'rounded-xl',
+  position = 'relative',
+}: {
+  name: string;
+  image?: string | null;
+  className?: string;
+  rounded?: string;
+  /**
+   * CSS position of the wrapper. `relative` by default; pass `absolute` when
+   * the artwork must fill a positioned ancestor (Tailwind resolves `relative`
+   * and `absolute` by stylesheet order, so the caller has to be explicit).
+   */
+  position?: 'relative' | 'absolute';
+}) {
+  const hue = hashName(name) % 360;
+  const background = image
+    ? [
+        `linear-gradient(180deg, rgba(6,8,15,0.05) 0%, rgba(6,8,15,0.32) 45%, rgba(6,8,15,0.92) 100%)`,
+        `url("${image}")`,
+      ].join(', ')
+    : [
+        // Texture on top, then two coloured spotlights, then the base tone.
+        `repeating-linear-gradient(45deg, rgba(255,255,255,0.05) 0 2px, transparent 2px 18px)`,
+        `radial-gradient(130% 95% at 20% 0%, hsla(${hue}, 70%, 58%, 0.8), transparent 68%)`,
+        `radial-gradient(120% 90% at 92% 92%, hsla(${(hue + 50) % 360}, 62%, 48%, 0.7), transparent 66%)`,
+        `radial-gradient(90% 70% at 60% 45%, hsla(${(hue + 280) % 360}, 55%, 44%, 0.45), transparent 70%)`,
+        `linear-gradient(115deg, hsla(${(hue + 200) % 360}, 50%, 32%, 0.95), hsla(${hue}, 55%, 19%, 0.98))`,
+      ].join(', ');
+
+  return (
+    <span
+      aria-hidden
+      className={`${position} block overflow-hidden bg-ink-900 ${rounded} ${className}`}
+      style={{
+        backgroundImage: background,
+        backgroundSize: image ? 'cover' : undefined,
+        backgroundPosition: 'center',
+      }}
+    >
+      {/* Gold hairline so the tile reads as a framed board. */}
+      <span className="pointer-events-none absolute inset-0 rounded-[inherit] ring-1 ring-inset ring-gold-500/15" />
+    </span>
+  );
+}
+
+/* ---------------------------------------------------------------------------
    Win-rate bar
 --------------------------------------------------------------------------- */
 

@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import { Cinzel, Inter } from 'next/font/google';
 import Link from 'next/link';
 import { AppNav } from '@/components/AppNav';
-import { AddPlayerButton } from '@/components/AddPlayerButton';
 import './globals.css';
 
 const cinzel = Cinzel({
@@ -59,10 +58,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
                 </span>
               </Link>
 
-              <div className="flex items-center gap-2">
-                <AddPlayerButton />
-                <AppNav />
-              </div>
+              <AppNav />
             </div>
           </header>
 
