@@ -1,4 +1,4 @@
-import { MatchForm } from '@/components/MatchForm';
+
 import { loadAppData } from '@/lib/data';
 
 export const dynamic = 'force-dynamic';
@@ -15,7 +15,6 @@ export default async function MatchesPage() {
           Данные сохраняются в ту же таблицу, что и Google Форма — статистика обновится сразу.
         </p>
       </div>
-      <MatchForm data={data} />
     </div>
   );
 }
