@@ -219,7 +219,8 @@ interface MapAggregate {
   wins: number;
   matches: number;
   firstTurnWins: number;
-  heroes: Map<string, { display: string; games: number }>;
+  /** Heroes on this battlefield with their games and wins here. */
+  heroes: Map<string, { display: string; games: number; wins: number }>;
   players: Map<string, { display: string; wins: number; games: number }>;
 }
 
@@ -227,6 +228,93 @@ interface MatchupAggregate {
   members: [string, string];
   games: number;
   winsByHero: Map<string, number>;
+}
+
+/**
+ * Accumulate "how does this hero fare against that opponent" records.
+ *
+ * One entry per (hero, opponent) pair; the opponent is counted once per
+ * match the two met, no matter how many seats they occupied.
+ */
+function recordOpponent(
+  target: Map<string, OpponentStat[]>,
+  hero: string,
+  opponent: string,
+  won: boolean,
+): void {
+  const heroKey = identityKey(hero);
+  let list = target.get(heroKey);
+  if (!list) {
+    list = [];
+    target.set(heroKey, list);
+  }
+  const opponentKey = identityKey(opponent);
+  let entry = list.find((item) => identityKey(item.name) === opponentKey);
+  if (!entry) {
+    entry = {
+      name: opponent,
+      image: null,
+      games: 0,
+      wins: 0,
+      losses: 0,
+      winRate: 0,
+    };
+    list.push(entry);
+  }
+  entry.games += 1;
+  if (won) entry.wins += 1;
+  else entry.losses += 1;
+  entry.winRate = entry.games > 0 ? entry.wins / entry.games : 0;
+}
+
+/** Merge two opponent lists for the same hero into one. */
+function mergeOpponents(base: OpponentStat[], extra: OpponentStat[]): OpponentStat[] {
+  const out = base.map((entry) => ({ ...entry }));
+  for (const entry of extra) {
+    const existing = out.find((item) => identityKey(item.name) === identityKey(entry.name));
+    if (!existing) {
+      out.push({ ...entry });
+      continue;
+    }
+    existing.games += entry.games;
+    existing.wins += entry.wins;
+    existing.losses += entry.losses;
+    existing.winRate = existing.games > 0 ? existing.wins / existing.games : 0;
+  }
+  return out;
+}
+
+/**
+ * Pick the nemesis and the best victim of a hero from a list of opponents.
+ *
+ * Only opponents with at least MIN_GAMES_FOR_NEMESIS meetings qualify — a
+ * single game would otherwise produce a meaningless 100 % / 0 % pair.
+ *
+ *   nemesis      — the opponent this hero loses to most often
+ *                  (the LOWEST win rate for this hero)
+ *   best victim  — the opponent this hero beats most often
+ *                  (the HIGHEST win rate for this hero)
+ *
+ * Both are picked from the same qualified pool, and they are always
+ * *different* opponents whenever the pool holds more than one entry.
+ */
+function pickNemesis(opponents: OpponentStat[]): {
+  worst: OpponentStat | null;
+  best: OpponentStat | null;
+} {
+  const qualified = opponents.filter((o) => o.games >= MIN_GAMES_FOR_NEMESIS);
+  const byLowest = [...qualified].sort(
+    (a, b) => a.winRate - b.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
+  );
+  const byHighest = [...qualified].sort(
+    (a, b) => b.winRate - a.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
+  );
+  const worst = byLowest[0] ?? null;
+  let best = byHighest[0] ?? null;
+  if (worst && best && worst.name === best.name && byHighest.length > 1) {
+    best = byHighest[1];
+  }
+  return { worst, best };
 }
 
 export function computeStats(
@@ -250,6 +338,9 @@ export function computeStats(
   >();
   const mapAgg = new Map<string, MapAggregate>();
   const matchupAgg = new Map<string, MatchupAggregate>();
+  /** Hero-vs-hero records, split by mode: 1 vs 1 and 2 vs 2. */
+  const opponentStats1v1 = new Map<string, OpponentStat[]>();
+  const opponentStats2v2 = new Map<string, OpponentStat[]>();
   const firstTurnAgg: Record<GameMode, { matches: number; first: number; second: number }> = {
     '1v1': { matches: 0, first: 0, second: 0 },
     '2v2': { matches: 0, first: 0, second: 0 },
@@ -472,6 +563,26 @@ export function computeStats(
         },
       ];
 
+      /*
+       * Hero vs hero records in 2 vs 2: every hero on one team is an
+       * opponent for every hero on the other team. This is what makes the
+       * nemesis / victim statistics meaningful for the team game as well.
+       */
+      const visible = teams.map((team) => ({
+        won: team.won,
+        heroes: team.heroes.filter((hero) => hero && !isHeroHidden(hero)),
+      }));
+      for (const side of visible) {
+        for (const opponentSide of visible) {
+          if (side === opponentSide) continue;
+          for (const hero of side.heroes) {
+            for (const opponent of opponentSide.heroes) {
+              recordOpponent(opponentStats2v2, hero, opponent, side.won);
+            }
+          }
+        }
+      }
+
       for (const team of teams) {
         // Two seats held by the same player are not a partnership — but the
         // two heroes they controlled DO form a valid hero duo.
@@ -522,12 +633,13 @@ export function computeStats(
       agg.wins += distinctWins;
       if (match.winner && firstTurnWon(match, winning)) agg.firstTurnWins += 1;
 
-      // Hero played most often on this battlefield.
-      match.heroes.forEach((hero) => {
+      // Heroes on this battlefield: how often they played and how often they won.
+      match.heroes.forEach((hero, seat) => {
         if (!hero || isHeroHidden(hero)) return;
         const heroKey = identityKey(hero);
-        const entry = agg.heroes.get(heroKey) ?? { display: hero, games: 0 };
+        const entry = agg.heroes.get(heroKey) ?? { display: hero, games: 0, wins: 0 };
         entry.games += 1;
+        if (seatWon(match, seat, winning)) entry.wins += 1;
         agg.heroes.set(heroKey, entry);
       });
 
@@ -680,6 +792,37 @@ export function computeStats(
     record(matchup.heroB, matchup.heroA, matchup.winsB, matchup.games);
   }
 
+  /*
+   * The 1 vs 1 records above already exist as the matchup matrix; move them
+   * into the per-mode table so both modes share one representation, then
+   * merge the two modes into the overall table used by the nemesis blocks.
+   */
+  opponentStats1v1.clear();
+  for (const [key, list] of opponentStats) {
+    opponentStats1v1.set(key, list);
+  }
+  opponentStats.clear();
+  for (const [key, list] of opponentStats1v1) {
+    opponentStats.set(key, list.map((entry) => ({ ...entry })));
+  }
+  for (const [key, list] of opponentStats2v2) {
+    opponentStats.set(key, mergeOpponents(opponentStats.get(key) ?? [], list));
+  }
+
+  // Every opponent entry knows its artwork.
+  for (const list of opponentStats.values()) {
+    for (const entry of list) {
+      entry.image = heroImages.get(identityKey(entry.name)) ?? null;
+    }
+  }
+  for (const table of [opponentStats1v1, opponentStats2v2]) {
+    for (const list of table.values()) {
+      for (const entry of list) {
+        entry.image = heroImages.get(identityKey(entry.name)) ?? null;
+      }
+    }
+  }
+
   // ------------------------------------------------------------------
   // Battlefield statistics — unknown / unnamed maps never enter the ratings.
   // ------------------------------------------------------------------
@@ -687,6 +830,17 @@ export function computeStats(
     const topHeroEntry = [...agg.heroes.values()].sort((a, b) => b.games - a.games)[0] ?? null;
     const topHero = topHeroEntry
       ? { name: topHeroEntry.display, games: topHeroEntry.games }
+      : null;
+    // The hero that wins most often on this battlefield.
+    const topWinningHeroEntry = [...agg.heroes.values()].sort(
+      (a, b) => b.wins - a.wins || b.games - a.games,
+    )[0] ?? null;
+    const topWinningHero = topWinningHeroEntry && topWinningHeroEntry.wins > 0
+      ? {
+          name: topWinningHeroEntry.display,
+          wins: topWinningHeroEntry.wins,
+          games: topWinningHeroEntry.games,
+        }
       : null;
     const topPlayerEntry =
       [...agg.players.values()].sort((a, b) => b.wins - a.wins || b.games - a.games)[0] ?? null;
@@ -710,6 +864,7 @@ export function computeStats(
       // 0 = the battlefield is perfectly even, 1 = one side always wins.
       balance: Math.abs(firstTurnWinRate - 0.5) * 2,
       topHero,
+      topWinningHero,
       topPlayer,
     };
   });
@@ -750,6 +905,7 @@ export function computeStats(
         games: mostPopularMapEntry.matches,
         winRate: mostPopularMapEntry.winRate,
         image: mostPopularMapEntry.image ?? null,
+        topWinningHero: mostPopularMapEntry.topWinningHero ?? null,
       }
     : null;
 
@@ -770,50 +926,23 @@ export function computeStats(
   const heroProfiles: HeroProfile[] = heroes.map((hero) => {
     const key = identityKey(hero.name);
     const opponents = opponentStats.get(key) ?? [];
+    const opponents1v1 = opponentStats1v1.get(key) ?? [];
+    const opponents2v2 = opponentStats2v2.get(key) ?? [];
+
     /*
-     * Nemesis / best victim.
-     *
-     * Only opponents with at least MIN_GAMES_FOR_NEMESIS meetings qualify —
-     * a single game would otherwise produce a meaningless 100 % / 0 % pair.
-     *
-     *   nemesis      — the opponent this hero loses to most often
-     *                  (the LOWEST win rate for this hero)
-     *   best victim  — the opponent this hero beats most often
-     *                  (the HIGHEST win rate for this hero)
-     *
-     * Both are picked from the same qualified pool, and the two are always
-     * different opponents whenever the pool holds more than one entry.
+     * Nemesis / best victim — calculated for the whole history and, in
+     * addition, separately for 1 vs 1 and 2 vs 2. The rules live in
+     * `pickNemesis`: only opponents with at least MIN_GAMES_FOR_NEMESIS
+     * meetings qualify, the nemesis is the one with the lowest win rate and
+     * the best victim the one with the highest — and they are always
+     * different characters when more than one opponent qualifies.
      */
-    const qualified = opponents.filter((o) => o.games >= MIN_GAMES_FOR_NEMESIS);
-    /*
-     * Both are picked from the same pool, and they are always *different*
-     * opponents whenever the pool holds more than one entry:
-     *
-     *   nemesis      — the opponent this hero loses to most often
-     *                  (the LOWEST win rate for this hero)
-     *   best victim  — the opponent this hero beats most often
-     *                  (the HIGHEST win rate for this hero)
-     *
-     * Ties in win rate are broken by the larger sample. When even that leaves
-     * both slots pointing at the same character, the next best opponent takes
-     * the second slot — a duplicated name would be meaningless.
-     */
-    const byLowest = [...qualified].sort(
-      (a, b) => a.winRate - b.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
-    );
-    const byHighest = [...qualified].sort(
-      (a, b) => b.winRate - a.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
-    );
-    const worstEnemy = byLowest[0] ?? null;
-    let bestVictim = byHighest[0] ?? null;
-    if (
-      worstEnemy &&
-      bestVictim &&
-      worstEnemy.name === bestVictim.name &&
-      byHighest.length > 1
-    ) {
-      bestVictim = byHighest[1];
-    }
+    const overall = pickNemesis(opponents);
+    const duel = pickNemesis(opponents1v1);
+    const team = pickNemesis(opponents2v2);
+
+    const worstEnemy = overall.worst;
+    const bestVictim = overall.best;
     const syn = synergiesByHero.get(key) ?? [];
     const bestSynergy = syn.length > 0 ? syn[0] : null;
     const worstSynergy = syn.length > 0 ? syn[syn.length - 1] : null;
@@ -835,6 +964,10 @@ export function computeStats(
       pickRate: validMatches > 0 ? hero.games / validMatches : 0,
       bestVictim,
       worstEnemy,
+      worstEnemy1v1: duel.worst,
+      bestVictim1v1: duel.best,
+      worstEnemy2v2: team.worst,
+      bestVictim2v2: team.best,
       favoriteMap: favoriteMapEntry
         ? {
             name: pickDisplayName(referenceSpellings.get(mapKey(favoriteMapEntry.name)) ?? []) ||
@@ -843,6 +976,10 @@ export function computeStats(
             image: mapImages.get(mapKey(favoriteMapEntry.name)) ?? null,
           }
         : null,
+      topMaps: hero.topMaps.map((map) => ({
+        name: pickDisplayName(referenceSpellings.get(mapKey(map.name)) ?? []) || map.name,
+        games: map.games,
+      })),
       bestSynergy,
       worstSynergy,
       // Worst opponents first (this hero struggles against them) and best
@@ -852,6 +989,12 @@ export function computeStats(
       ),
       victims: [...opponents].sort(
         (a, b) => b.winRate - a.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
+      ),
+      opponents1v1: [...opponents1v1].sort(
+        (a, b) => a.winRate - b.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
+      ),
+      opponents2v2: [...opponents2v2].sort(
+        (a, b) => a.winRate - b.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
       ),
     };
   });

@@ -27,6 +27,14 @@ import { HeroAvatar } from './HeroModal';
 
 interface PlayerModalContextValue {
   openPlayer: (name: string) => void;
+  /**
+   * Artwork of a player, taken from the IMAGES tab.
+   *
+   * Every player avatar resolves its picture through this lookup, so a caller
+   * never has to remember to pass `image` — that is how images went missing
+   * in some blocks before.
+   */
+  playerImage: (name: string) => string | null;
 }
 
 const PlayerModalContext = createContext<PlayerModalContextValue | null>(null);
@@ -36,7 +44,7 @@ const PlayerModalContext = createContext<PlayerModalContextValue | null>(null);
  * Outside the provider the call is a no-op, so components stay reusable.
  */
 export function usePlayerModal(): PlayerModalContextValue {
-  return useContext(PlayerModalContext) ?? { openPlayer: () => {} };
+  return useContext(PlayerModalContext) ?? { openPlayer: () => {}, playerImage: () => null };
 }
 
 /* ---------------------------------------------------------------------------
@@ -68,6 +76,18 @@ export function PlayerModalProvider({
 
   const selected = selectedName ? records.get(identityKey(selectedName)) ?? null : null;
 
+  /*
+   * Artwork lookup. Keyed by the normalized player name so that the different
+   * spellings of the same player always resolve to the same picture.
+   */
+  const playerImages = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of data.reference.players) {
+      if (entry.image) map.set(identityKey(entry.name), entry.image);
+    }
+    return map;
+  }, [data.reference.players]);
+
   useEffect(() => {
     if (!selected) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -83,8 +103,11 @@ export function PlayerModalProvider({
   }, [selected]);
 
   const value = useMemo<PlayerModalContextValue>(
-    () => ({ openPlayer: (name: string) => setSelectedName(name) }),
-    [],
+    () => ({
+      openPlayer: (name: string) => setSelectedName(name),
+      playerImage: (name: string) => playerImages.get(identityKey(name)) ?? null,
+    }),
+    [playerImages],
   );
 
   return (
@@ -130,11 +153,15 @@ export function PlayerAvatar({
   rounded?: string;
   className?: string;
 }) {
-  const { openPlayer } = usePlayerModal();
+  const { openPlayer, playerImage } = usePlayerModal();
+
+  // The caller may pass an explicit picture; otherwise it is looked up in the
+  // IMAGES tab, so avatars never silently fall back to a monogram.
+  const src = image ?? playerImage(name);
 
   // An empty player slot renders the plain monogram and is not clickable.
   if (!name.trim()) {
-    return <Avatar name={name} image={image} size={size} rounded={rounded} />;
+    return <Avatar name={name} image={src} size={size} rounded={rounded} />;
   }
 
   return (
@@ -148,7 +175,7 @@ export function PlayerAvatar({
       aria-label={`Подробнее об игроке ${name}`}
       className={`shrink-0 rounded-lg transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-500 ${className}`}
     >
-      <Avatar name={name} image={image} size={size} rounded={rounded} />
+      <Avatar name={name} image={src} size={size} rounded={rounded} />
     </button>
   );
 }
@@ -253,6 +280,7 @@ function PlayerModal({
   heroImages: Record<string, string | null>;
   onClose: () => void;
 }) {
+  const { playerImage } = usePlayerModal();
   const recent = useMemo(
     () => recentMatchesFor(matches, record.name),
     [matches, record.name],
@@ -268,7 +296,7 @@ function PlayerModal({
         aria-label={`${record.name} — профиль игрока`}
       >
         <header className="flex items-start gap-3 border-b border-ink-700 p-5">
-          <Avatar name={record.name} image={record.image} size={56} rounded="rounded-xl" />
+          <Avatar name={record.name} image={record.image ?? playerImage(record.name)} size={56} rounded="rounded-xl" />
           <div className="min-w-0 flex-1">
             <h3 className="truncate font-[family-name:var(--font-display)] text-lg font-bold text-parch-100">
               {record.name}

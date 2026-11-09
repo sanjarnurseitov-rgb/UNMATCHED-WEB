@@ -102,12 +102,14 @@ export function MapArt({
    */
   position?: 'relative' | 'absolute';
 }) {
+  const [failed, setFailed] = useState(false);
   const hue = hashName(name) % 360;
-  const background = image
-    ? [
-        `linear-gradient(180deg, rgba(6,8,15,0.05) 0%, rgba(6,8,15,0.32) 45%, rgba(6,8,15,0.92) 100%)`,
-        `url("${image}")`,
-      ].join(', ')
+  const showImage = Boolean(image) && !failed;
+
+  // The real picture is a plain <img>; the layer on top only darkens it so
+  // the caption stays readable.
+  const overlay = showImage
+    ? `linear-gradient(180deg, rgba(6,8,15,0.05) 0%, rgba(6,8,15,0.32) 45%, rgba(6,8,15,0.92) 100%)`
     : [
         // Texture on top, then two coloured spotlights, then the base tone.
         `repeating-linear-gradient(45deg, rgba(255,255,255,0.05) 0 2px, transparent 2px 18px)`,
@@ -118,15 +120,22 @@ export function MapArt({
       ].join(', ');
 
   return (
-    <span
-      aria-hidden
-      className={`${position} block overflow-hidden bg-ink-900 ${rounded} ${className}`}
-      style={{
-        backgroundImage: background,
-        backgroundSize: image ? 'cover' : undefined,
-        backgroundPosition: 'center',
-      }}
-    >
+    <span className={`${position} block overflow-hidden bg-ink-900 ${rounded} ${className}`}>
+      {showImage ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={image as string}
+          alt={name}
+          loading="lazy"
+          onError={() => setFailed(true)}
+          className="h-full w-full object-cover"
+        />
+      ) : null}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-0"
+        style={{ backgroundImage: overlay, backgroundSize: showImage ? 'cover' : undefined }}
+      />
       {/* Gold hairline so the tile reads as a framed board. */}
       <span className="pointer-events-none absolute inset-0 rounded-[inherit] ring-1 ring-inset ring-gold-500/15" />
     </span>
@@ -210,28 +219,48 @@ export function StatCard({
           {value}
         </p>
       )}
-      {sub ? <p className="mt-1 text-xs text-parch-500">{sub}</p> : null}
+      {sub ? <p className="mt-1.5 text-sm leading-relaxed text-parch-400">{sub}</p> : null}
       {children}
     </div>
   );
 }
 
-/** One line inside a stat card: label on the left, value on the right. */
+/**
+ * One metric inside a stat card.
+ *
+ * `stacked` puts the label above the value — the readable choice when several
+ * metrics sit side by side in a grid. The inline variant keeps the label on
+ * the left and the value on the right.
+ */
 export function MiniStat({
   label,
   value,
   tone = 'text-parch-100',
   hint,
+  stacked = false,
 }: {
   label: string;
   value: React.ReactNode;
   tone?: string;
   hint?: string;
+  stacked?: boolean;
 }) {
+  if (stacked) {
+    return (
+      <div
+        className="rounded-lg border border-ink-700 bg-ink-900/70 px-3 py-2"
+        title={hint}
+      >
+        <p className="truncate text-xs text-parch-500">{label}</p>
+        <p className={`mt-1 text-xl font-bold tabular-nums ${tone}`}>{value}</p>
+      </div>
+    );
+  }
+
   return (
     <div className="flex items-baseline justify-between gap-2" title={hint}>
-      <span className="truncate text-[0.7rem] text-parch-500">{label}</span>
-      <span className={`shrink-0 text-sm font-bold tabular-nums ${tone}`}>{value}</span>
+      <span className="truncate text-xs text-parch-500">{label}</span>
+      <span className={`shrink-0 text-base font-bold tabular-nums ${tone}`}>{value}</span>
     </div>
   );
 }
@@ -261,14 +290,14 @@ export function SplitBar({
       <div className="mt-2 space-y-1">
         {segments.map((segment) => (
           <div key={segment.label} className="flex items-center justify-between gap-2">
-            <span className="flex items-center gap-1.5 text-[0.7rem] text-parch-500">
+            <span className="flex items-center gap-1.5 text-xs text-parch-400">
               <span
                 className="inline-block h-1.5 w-1.5 rounded-full"
                 style={{ background: segment.color }}
               />
               {segment.label}
             </span>
-            <span className="text-xs font-bold tabular-nums text-parch-100">{segment.value}</span>
+            <span className="text-sm font-bold tabular-nums text-parch-100">{segment.value}</span>
           </div>
         ))}
       </div>

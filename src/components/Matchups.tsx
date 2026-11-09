@@ -13,6 +13,7 @@ import {
   formatPct,
 } from './ui';
 import { HeroAvatar } from './HeroModal';
+import type { OpponentStat } from '@/lib/types';
 import { PlayerAvatar, PlayerLink } from './PlayerModal';
 import { MIN_GAMES_FOR_NEMESIS, MIN_GAMES_FOR_TIER } from '@/lib/stats';
 import type { AppData, HeroProfile, HeroTier, Matchup } from '@/lib/types';
@@ -299,7 +300,16 @@ function MatchupStats({ stats }: { stats: AppData['stats'] }) {
   const nemesisRows = useMemo(
     () =>
       stats.heroProfiles
-        .filter((hero) => hero.nemesis.some((o) => o.games >= MIN_GAMES_FOR_NEMESIS))
+        .filter((hero) => hero.opponents1v1.some((o) => o.games >= MIN_GAMES_FOR_NEMESIS))
+        .sort((a, b) => b.games - a.games),
+    [stats.heroProfiles],
+  );
+
+  /** The same table for the team game. */
+  const nemesisRows2v2 = useMemo(
+    () =>
+      stats.heroProfiles
+        .filter((hero) => hero.opponents2v2.some((o) => o.games >= MIN_GAMES_FOR_NEMESIS))
         .sort((a, b) => b.games - a.games),
     [stats.heroProfiles],
   );
@@ -421,104 +431,15 @@ function MatchupStats({ stats }: { stats: AppData['stats'] }) {
                 </tr>
               </thead>
               <tbody>
-                {nemesisRows.map((hero) => {
-                  /*
-                   * Both columns come from the same pool of opponents the hero
-                   * met at least twice. When only one opponent qualifies, it
-                   * is shown once — in the column that matches its result —
-                   * so the same character never appears twice in a row.
-                   */
-                  const sameOpponent =
-                    hero.worstEnemy && hero.bestVictim
-                      ? hero.worstEnemy.name === hero.bestVictim.name
-                      : false;
-                  const onlyOpponent = sameOpponent ? hero.worstEnemy : null;
-                  const isVictim = onlyOpponent ? onlyOpponent.winRate >= 0.5 : false;
-
-                  return (
-                    <tr key={hero.name} className="border-b border-ink-800/70">
-                      <td className="py-2 pr-3">
-                        <div className="flex items-center gap-2.5">
-                          <HeroAvatar name={hero.name} image={hero.image} size={28} />
-                          <span className="text-parch-100">{hero.name}</span>
-                        </div>
-                      </td>
-                      <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
-                        {hero.games1v1}
-                      </td>
-                      <td className="py-2 pr-3">
-                        {onlyOpponent ? (
-                          isVictim ? (
-                            <span
-                              className="text-xs text-parch-600"
-                              title="Единственный соперник, сыгранный не менее двух раз"
-                            >
-                              —
-                            </span>
-                          ) : (
-                            <OpponentChip opponent={onlyOpponent} />
-                          )
-                        ) : hero.worstEnemy ? (
-                          <OpponentChip opponent={hero.worstEnemy} />
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td className="py-2 pr-3 text-right tabular-nums">
-                        {onlyOpponent ? (
-                          isVictim ? (
-                            '—'
-                          ) : (
-                            <span className="font-semibold text-crimson-400">
-                              {formatPct(onlyOpponent.winRate)}
-                            </span>
-                          )
-                        ) : hero.worstEnemy ? (
-                          <span className="font-semibold text-crimson-400">
-                            {formatPct(hero.worstEnemy.winRate)}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td className="py-2 pr-3">
-                        {onlyOpponent ? (
-                          isVictim ? (
-                            <OpponentChip opponent={onlyOpponent} />
-                          ) : (
-                            <span
-                              className="text-xs text-parch-600"
-                              title="Единственный соперник, сыгранный не менее двух раз"
-                            >
-                              —
-                            </span>
-                          )
-                        ) : hero.bestVictim ? (
-                          <OpponentChip opponent={hero.bestVictim} />
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                      <td className="py-2 pr-3 text-right tabular-nums">
-                        {onlyOpponent ? (
-                          isVictim ? (
-                            <span className="font-semibold text-emerald-400">
-                              {formatPct(onlyOpponent.winRate)}
-                            </span>
-                          ) : (
-                            '—'
-                          )
-                        ) : hero.bestVictim ? (
-                          <span className="font-semibold text-emerald-400">
-                            {formatPct(hero.bestVictim.winRate)}
-                          </span>
-                        ) : (
-                          '—'
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
+                {nemesisRows.map((hero) => (
+                  <NemesisRow
+                    key={hero.name}
+                    hero={hero}
+                    games={hero.games1v1}
+                    worst={hero.worstEnemy1v1}
+                    best={hero.bestVictim1v1}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
@@ -541,8 +462,49 @@ function TeamStats({ stats }: { stats: AppData['stats'] }) {
   const best = stats.heroSynergies.slice(0, 15);
   const worst = stats.antiSynergies.slice(0, 15);
 
+  const nemesisRows2v2 = stats.heroProfiles
+    .filter((hero) => hero.opponents2v2.some((o) => o.games >= MIN_GAMES_FOR_NEMESIS))
+    .sort((a, b) => b.games - a.games)
+    .slice(0, 15);
+
   return (
     <div className="space-y-4">
+      <Panel
+        title="Немезиды · 2 vs 2"
+        subtitle="Худший враг и лучшая жертва каждого героя в командной игре"
+        action={<Chip tone="gold">{nemesisRows2v2.length} героев</Chip>}
+      >
+        {nemesisRows2v2.length === 0 ? (
+          <EmptyState message="Недостаточно данных" />
+        ) : (
+          <div className="-mx-1 overflow-x-auto px-1">
+            <table className="w-full min-w-[760px] border-collapse text-sm">
+              <thead>
+                <tr className="border-b border-ink-700 text-left">
+                  <th className="stat-label py-2 pr-3">Герой</th>
+                  <th className="stat-label py-2 pr-3 text-right">Матчей 2v2</th>
+                  <th className="stat-label py-2 pr-3">Худший враг</th>
+                  <th className="stat-label py-2 pr-3 text-right">Его винрейт</th>
+                  <th className="stat-label py-2 pr-3">Лучшая жертва</th>
+                  <th className="stat-label py-2 pr-3 text-right">Его винрейт</th>
+                </tr>
+              </thead>
+              <tbody>
+                {nemesisRows2v2.map((hero) => (
+                  <NemesisRow
+                    key={hero.name}
+                    hero={hero}
+                    games={hero.games2v2}
+                    worst={hero.worstEnemy2v2}
+                    best={hero.bestVictim2v2}
+                  />
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Panel>
+
       <div className="grid gap-4 xl:grid-cols-2">
         <Panel
           title="Лучшие синергии"
@@ -786,6 +748,108 @@ function HeroLink({ hero }: { hero: HeroProfile }) {
         {formatPct(hero.winRate)}
       </span>
     </span>
+  );
+}
+
+/**
+ * One row of the nemesis table.
+ *
+ * The worst enemy and the best victim come from the same pool of opponents
+ * (at least two meetings). When only one opponent qualifies, it is shown
+ * once — in the column that matches its result — so the same character never
+ * appears twice in a row.
+ */
+function NemesisRow({
+  hero,
+  games,
+  worst,
+  best,
+}: {
+  hero: AppData['stats']['heroProfiles'][number];
+  games: number;
+  worst: OpponentStat | null;
+  best: OpponentStat | null;
+}) {
+  const sameOpponent = Boolean(worst && best && worst.name === best.name);
+  const onlyOpponent = sameOpponent ? worst : null;
+  const isVictim = onlyOpponent ? onlyOpponent.winRate >= 0.5 : false;
+
+  return (
+    <tr className="border-b border-ink-800/70">
+      <td className="py-2 pr-3">
+        <div className="flex items-center gap-2.5">
+          <HeroAvatar name={hero.name} image={hero.image} size={28} />
+          <span className="text-parch-100">{hero.name}</span>
+        </div>
+      </td>
+      <td className="py-2 pr-3 text-right tabular-nums text-parch-300">{games}</td>
+      <td className="py-2 pr-3">
+        {onlyOpponent ? (
+          isVictim ? (
+            <span
+              className="text-xs text-parch-600"
+              title="Единственный соперник, сыгранный не менее двух раз"
+            >
+              —
+            </span>
+          ) : (
+            <OpponentChip opponent={onlyOpponent} />
+          )
+        ) : worst ? (
+          <OpponentChip opponent={worst} />
+        ) : (
+          '—'
+        )}
+      </td>
+      <td className="py-2 pr-3 text-right tabular-nums">
+        {onlyOpponent ? (
+          isVictim ? (
+            '—'
+          ) : (
+            <span className="font-semibold text-crimson-400">
+              {formatPct(onlyOpponent.winRate)}
+            </span>
+          )
+        ) : worst ? (
+          <span className="font-semibold text-crimson-400">{formatPct(worst.winRate)}</span>
+        ) : (
+          '—'
+        )}
+      </td>
+      <td className="py-2 pr-3">
+        {onlyOpponent ? (
+          isVictim ? (
+            <OpponentChip opponent={onlyOpponent} />
+          ) : (
+            <span
+              className="text-xs text-parch-600"
+              title="Единственный соперник, сыгранный не менее двух раз"
+            >
+              —
+            </span>
+          )
+        ) : best ? (
+          <OpponentChip opponent={best} />
+        ) : (
+          '—'
+        )}
+      </td>
+      <td className="py-2 pr-3 text-right tabular-nums">
+        {onlyOpponent ? (
+          isVictim ? (
+            <span className="font-semibold text-emerald-400">
+              {formatPct(onlyOpponent.winRate)}
+            </span>
+          ) : (
+            '—'
+          )
+        ) : best ? (
+          <span className="font-semibold text-emerald-400">{formatPct(best.winRate)}</span>
+        ) : (
+          '—'
+        )}
+      </td>
+    </tr>
   );
 }
 

@@ -17,6 +17,14 @@ import { Avatar, Chip, WinRateBar, formatPct } from './ui';
 
 interface HeroModalContextValue {
   openHero: (name: string) => void;
+  /**
+   * Artwork of a hero, taken from the IMAGES tab.
+   *
+   * Every hero avatar resolves its picture through this lookup, so a caller
+   * never has to remember to pass `image` — that is how images went missing
+   * in some blocks before.
+   */
+  heroImage: (name: string) => string | null;
 }
 
 const HeroModalContext = createContext<HeroModalContextValue | null>(null);
@@ -26,7 +34,7 @@ const HeroModalContext = createContext<HeroModalContextValue | null>(null);
  * Outside the provider the call is a no-op, so components stay reusable.
  */
 export function useHeroModal(): HeroModalContextValue {
-  return useContext(HeroModalContext) ?? { openHero: () => {} };
+  return useContext(HeroModalContext) ?? { openHero: () => {}, heroImage: () => null };
 }
 
 export function HeroModalProvider({
@@ -53,6 +61,18 @@ export function HeroModalProvider({
 
   const selected = selectedName ? profiles.get(identityKey(selectedName)) ?? null : null;
 
+  /*
+   * Artwork lookup. Keyed by the normalized hero name so that the different
+   * spellings of the same hero always resolve to the same picture.
+   */
+  const heroImages = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const entry of data.reference.heroes) {
+      if (entry.image) map.set(identityKey(entry.name), entry.image);
+    }
+    return map;
+  }, [data.reference.heroes]);
+
   useEffect(() => {
     if (!selected) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -68,8 +88,11 @@ export function HeroModalProvider({
   }, [selected]);
 
   const value = useMemo<HeroModalContextValue>(
-    () => ({ openHero: (name: string) => setSelectedName(name) }),
-    [],
+    () => ({
+      openHero: (name: string) => setSelectedName(name),
+      heroImage: (name: string) => heroImages.get(identityKey(name)) ?? null,
+    }),
+    [heroImages],
   );
 
   return (
@@ -108,11 +131,15 @@ export function HeroAvatar({
   rounded?: string;
   className?: string;
 }) {
-  const { openHero } = useHeroModal();
+  const { openHero, heroImage } = useHeroModal();
+
+  // The caller may pass an explicit picture; otherwise it is looked up in the
+  // IMAGES tab, so avatars never silently fall back to a monogram.
+  const src = image ?? heroImage(name);
 
   // An empty hero slot renders the plain monogram and is not clickable.
   if (!name.trim()) {
-    return <Avatar name={name} image={image} size={size} rounded={rounded} />;
+    return <Avatar name={name} image={src} size={size} rounded={rounded} />;
   }
 
   return (
@@ -126,7 +153,7 @@ export function HeroAvatar({
       aria-label={`Подробнее о герое ${name}`}
       className={`shrink-0 rounded-lg transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-500 ${className}`}
     >
-      <Avatar name={name} image={image} size={size} rounded={rounded} />
+      <Avatar name={name} image={src} size={size} rounded={rounded} />
     </button>
   );
 }
@@ -145,8 +172,6 @@ const TIER_STYLE: Record<HeroTier, { label: string; tone: 'gold' | 'emerald' | '
 
 function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => void }) {
   const tier = TIER_STYLE[profile.tier];
-  const worstEnemy = profile.worstEnemy;
-  const bestVictim = profile.bestVictim;
 
   return (
     <>
@@ -218,65 +243,45 @@ function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => 
           </div>
 
           {/*
-            Nemesis & victim.
+            Nemesis & victim — per mode.
 
-            Both are picked from the opponents the hero has met at least
-            twice. When only one opponent qualifies, that character is both
-            the worst and the best matchup — instead of showing the same name
-            twice, a single card explains the situation.
+            The duel game and the team game are different matchups, so each
+            one gets its own block: the worst opponent and the best victim in
+            1 vs 1 and in 2 vs 2. Every pick comes from the opponents the hero
+            has met at least twice; when only one opponent qualifies, that
+            character is both the worst and the best matchup — instead of
+            showing the same name twice, a single card explains it.
           */}
-          {worstEnemy && bestVictim && worstEnemy.name === bestVictim.name ? (
-            <div className="rounded-lg border border-ink-700 bg-ink-900 p-3">
-              <p
-                className="stat-label"
-                title="У героя всего один соперник, сыгранный не менее двух раз"
-              >
-                Единственный соперник с достаточной выборкой
-              </p>
-              <div className="mt-2 flex items-center gap-3">
-                <Avatar
-                  name={worstEnemy.name}
-                  image={worstEnemy.image}
-                  size={32}
-                  rounded="rounded-md"
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-parch-100">
-                    {worstEnemy.name}
-                  </p>
-                  <p className="text-xs text-parch-500">
-                    {worstEnemy.games} матчей · {worstEnemy.wins} побед
-                  </p>
-                </div>
-                <span
-                  className={`text-sm font-bold tabular-nums ${
-                    worstEnemy.winRate >= 0.5 ? 'text-emerald-400' : 'text-crimson-400'
-                  }`}
-                >
-                  {formatPct(worstEnemy.winRate)}
-                </span>
-              </div>
-              <p className="mt-2 text-xs text-parch-500">
-                Отдельных «худшего врага» и «лучшей жертвы» нет: соперник только один, и он
-                набирает минимум два матча.
-              </p>
-            </div>
-          ) : (
-            <div className="grid gap-3 sm:grid-cols-2">
-              <OpponentCard
-                title="Худший враг"
-                hint="Кто обыгрывает этого героя чаще всего"
-                opponent={worstEnemy}
-                empty="Нет соперников с достаточной выборкой"
-              />
-              <OpponentCard
-                title="Лучшая жертва"
-                hint="Кого этот герой обыгрывает чаще всего"
-                opponent={bestVictim}
-                empty="Нет соперников с достаточной выборкой"
-              />
-            </div>
-          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <OpponentCard
+              title="Худший враг · 1 vs 1"
+              hint="Кто обыгрывает этого героя чаще всего в дуэли"
+              opponent={profile.worstEnemy1v1}
+              sibling={profile.bestVictim1v1}
+              empty="Нет соперников с двумя матчами"
+            />
+            <OpponentCard
+              title="Худший враг · 2 vs 2"
+              hint="Кто обыгрывает этого героя чаще всего в командной игре"
+              opponent={profile.worstEnemy2v2}
+              sibling={profile.bestVictim2v2}
+              empty="Нет соперников с двумя матчами"
+            />
+            <OpponentCard
+              title="Лучшая жертва · 1 vs 1"
+              hint="Кого этот герой обыгрывает чаще всего в дуэли"
+              opponent={profile.bestVictim1v1}
+              sibling={profile.worstEnemy1v1}
+              empty="Нет соперников с двумя матчами"
+            />
+            <OpponentCard
+              title="Лучшая жертва · 2 vs 2"
+              hint="Кого этот герой обыгрывает чаще всего в командной игре"
+              opponent={profile.bestVictim2v2}
+              sibling={profile.worstEnemy2v2}
+              empty="Нет соперников с двумя матчами"
+            />
+          </div>
 
           {/* Favourite map & best synergy */}
           <div className="grid gap-3 sm:grid-cols-2">
@@ -284,16 +289,21 @@ function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => 
               <p className="stat-label">Любимое поле</p>
               {profile.favoriteMap ? (
                 <div className="mt-2 flex items-center gap-3">
-                  <span
-                    className="h-11 w-11 shrink-0 rounded-lg border border-ink-600 bg-cover bg-center"
-                    style={
-                      profile.favoriteMap.image
-                        ? { backgroundImage: `url("${profile.favoriteMap.image}")` }
-                        : undefined
-                    }
-                    aria-hidden
-                  />
-                  <div className="min-w-0">
+                  {profile.favoriteMap.image ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={profile.favoriteMap.image}
+                      alt={profile.favoriteMap.name}
+                      loading="lazy"
+                      className="h-11 w-11 shrink-0 rounded-lg border border-ink-600 object-cover"
+                    />
+                  ) : (
+                    <span
+                      className="h-11 w-11 shrink-0 rounded-lg border border-ink-600 bg-ink-800"
+                      aria-hidden
+                    />
+                  )}
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-parch-100">
                       {profile.favoriteMap.name}
                     </p>
@@ -311,17 +321,18 @@ function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => 
               <p className="stat-label">Лучший союзник</p>
               {profile.bestSynergy ? (
                 <div className="mt-2 flex items-center gap-3">
-                  <span className="flex -space-x-2">
+                  <span className="flex shrink-0 -space-x-2">
                     {profile.bestSynergy.members.map((member) => (
-                      <Avatar
+                      <HeroAvatar
                         key={member}
                         name={member}
                         size={32}
-                        rounded="rounded-md ring-2 ring-ink-900"
+                        rounded="rounded-md"
+                        className="rounded-md ring-2 ring-ink-900"
                       />
                     ))}
                   </span>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <p className="truncate text-sm font-medium text-parch-100">
                       {profile.bestSynergy.members.join(' + ')}
                     </p>
@@ -341,7 +352,26 @@ function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => 
             </div>
           </div>
 
-          {/* Full matchup table */}
+          {/* Favourite battlefields — the full list, not only the top one. */}
+          {profile.topMaps.length > 0 ? (
+            <div className="rounded-lg border border-ink-700 bg-ink-900 p-3">
+              <p className="stat-label">Любимые поля</p>
+              <ul className="mt-2 space-y-1.5">
+                {profile.topMaps.slice(0, 6).map((map) => (
+                  <li key={map.name} className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 flex-1 truncate text-xs text-parch-200">
+                      {map.name}
+                    </span>
+                    <span className="shrink-0 text-xs tabular-nums text-parch-400">
+                      {map.games} игр
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
+          {/* Full matchup table, per mode */}
           {profile.nemesis.length > 0 ? (
             <details className="rounded-lg border border-ink-700 bg-ink-900 p-3">
               <summary className="cursor-pointer text-xs font-semibold text-parch-300">
@@ -387,39 +417,59 @@ function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => 
   );
 }
 
+/**
+ * One nemesis / best-victim block.
+ *
+ * `sibling` is the opposite slot of the same mode (the best victim for a
+ * nemesis card and vice versa). When both resolve to the same character the
+ * hero has only one qualified opponent, and the card says so instead of
+ * pretending there are two.
+ */
 function OpponentCard({
   title,
   hint,
   opponent,
+  sibling,
   empty,
 }: {
   title: string;
   hint: string;
   opponent: { name: string; image?: string | null; games: number; wins: number; winRate: number } | null;
+  sibling?: { name: string; image?: string | null; games: number; wins: number; winRate: number } | null;
   empty: string;
 }) {
+  const isOnlyOpponent = Boolean(opponent && sibling && opponent.name === sibling.name);
+
   return (
     <div className="rounded-lg border border-ink-700 bg-ink-900 p-3">
       <p className="stat-label" title={hint}>
         {title}
       </p>
       {opponent ? (
-        <div className="mt-2 flex items-center gap-3">
-          <Avatar name={opponent.name} image={opponent.image} size={32} rounded="rounded-md" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-medium text-parch-100">{opponent.name}</p>
-            <p className="text-xs text-parch-500">
-              {opponent.games} матчей · {opponent.wins} побед
-            </p>
+        <>
+          <div className="mt-2 flex items-center gap-3">
+            <HeroAvatar name={opponent.name} image={opponent.image} size={32} rounded="rounded-md" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-parch-100">{opponent.name}</p>
+              <p className="text-xs text-parch-500">
+                {opponent.games} матчей · {opponent.wins} побед
+              </p>
+            </div>
+            <span
+              className={`text-sm font-bold tabular-nums ${
+                opponent.winRate >= 0.5 ? 'text-emerald-400' : 'text-crimson-400'
+              }`}
+            >
+              {formatPct(opponent.winRate)}
+            </span>
           </div>
-          <span
-            className={`text-sm font-bold tabular-nums ${
-              opponent.winRate >= 0.5 ? 'text-emerald-400' : 'text-crimson-400'
-            }`}
-          >
-            {formatPct(opponent.winRate)}
-          </span>
-        </div>
+          {isOnlyOpponent ? (
+            <p className="mt-2 text-[0.7rem] leading-snug text-parch-500">
+              Единственный соперник с достаточной выборкой — отдельного «худшего врага» и
+              «лучшей жертвы» в этом режиме нет.
+            </p>
+          ) : null}
+        </>
       ) : (
         <p className="mt-2 text-xs text-parch-500">{empty}</p>
       )}

@@ -1,15 +1,18 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Avatar, Chip, WinRateBar, formatPct } from './ui';
-import { HeroAvatar } from './HeroModal';
-import { PlayerAvatar, PlayerLink } from './PlayerModal';
+import { useMemo, useState } from 'react';
+import { Chip, WinRateBar, formatPct } from './ui';
+import { HeroAvatar, useHeroModal } from './HeroModal';
+import { PlayerAvatar, PlayerLink, usePlayerModal } from './PlayerModal';
 import type { DetailedRecord } from '@/lib/types';
 
 /**
- * Leaderboard table for players or heroes, with a drill-down modal that
- * shows the entry's favourite heroes / maps.
+ * Leaderboard table for players or heroes.
+ *
+ * There is exactly ONE modal per entity in the whole app: clicking a hero
+ * opens the global hero modal, clicking a player opens the global player
+ * modal. This table therefore has no drill-down of its own — it only routes
+ * the click to the global modals.
  *
  * `layout="split"` renders two column groups — "1 vs 1" and "2 vs 2" — each
  * with its own games / wins / losses / win-rate, separated by a vertical
@@ -27,28 +30,17 @@ export function EntityTable({
   emptyMessage: string;
   layout?: 'combined' | 'split';
 }) {
-  const [selected, setSelected] = useState<DetailedRecord | null>(null);
   const [query, setQuery] = useState('');
   const [sortBy, setSortBy] = useState<'games' | 'winRate' | 'name'>('games');
-  const [mounted, setMounted] = useState(false);
 
-  // The modal is rendered into <body> through a portal, so it can never be
-  // offset by a transformed ancestor (the fade-up animation on the panel).
-  useEffect(() => setMounted(true), []);
+  // The one and only modals of the app.
+  const { openHero } = useHeroModal();
+  const { openPlayer } = usePlayerModal();
 
-  useEffect(() => {
-    if (!selected) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSelected(null);
-    };
-    document.addEventListener('keydown', onKeyDown);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [selected]);
+  const open = (record: DetailedRecord) => {
+    if (kind === 'hero') openHero(record.name);
+    else openPlayer(record.name);
+  };
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -97,18 +89,11 @@ export function EntityTable({
 
       <div className="-mx-1 overflow-x-auto px-1">
         {layout === 'split' ? (
-          <SplitTable filtered={filtered} kind={kind} onSelect={setSelected} />
+          <SplitTable filtered={filtered} kind={kind} onSelect={open} />
         ) : (
-          <CombinedTable filtered={filtered} kind={kind} onSelect={setSelected} />
+          <CombinedTable filtered={filtered} kind={kind} onSelect={open} />
         )}
       </div>
-
-      {mounted && selected
-        ? createPortal(
-            <EntityModal record={selected} kind={kind} onClose={() => setSelected(null)} />,
-            document.body,
-          )
-        : null}
     </>
   );
 }
@@ -174,7 +159,7 @@ function SplitTable({
           <tr
             key={record.name}
             onClick={() => onSelect(record)}
-            title="Открыть подробности"
+            title={kind === 'hero' ? 'Открыть профиль героя' : 'Открыть профиль игрока'}
             className="cursor-pointer border-b border-ink-800/70 transition-colors hover:bg-ink-800/40"
           >
             <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
@@ -261,7 +246,7 @@ function CombinedTable({
           <tr
             key={record.name}
             onClick={() => onSelect(record)}
-            title="Открыть подробности"
+            title={kind === 'hero' ? 'Открыть профиль героя' : 'Открыть профиль игрока'}
             className="cursor-pointer border-b border-ink-800/70 transition-colors hover:bg-ink-800/40"
           >
             <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
@@ -308,150 +293,5 @@ function CombinedTable({
         ))}
       </tbody>
     </table>
-  );
-}
-
-/**
- * Detail modal.
- *
- * Positioning: the backdrop covers the viewport, and the panel itself is
- * `position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%)`
- * so it is always centred in the viewport the user is looking at — even when
- * the table sits far down a long page.
- */
-function EntityModal({
-  record,
-  kind,
-  onClose,
-}: {
-  record: DetailedRecord;
-  kind: 'player' | 'hero';
-  onClose: () => void;
-}) {
-  const wr1v1 = record.games1v1 > 0 ? record.wins1v1 / record.games1v1 : null;
-  const wr2v2 = record.games2v2 > 0 ? record.wins2v2 / record.games2v2 : null;
-
-  return (
-    <>
-      <div className="modal-overlay bg-black/70 backdrop-blur-sm" onClick={onClose} />
-      <div
-        className="modal-panel panel"
-        role="dialog"
-        aria-modal="true"
-        aria-label={`${record.name} — подробности`}
-      >
-        <header className="sticky top-0 flex items-start gap-3 border-b border-ink-700 bg-ink-850/95 p-5 backdrop-blur">
-          <Avatar name={record.name} image={record.image} size={52} rounded="rounded-xl" />
-          <div className="min-w-0 flex-1">
-            <h3 className="truncate font-[family-name:var(--font-display)] text-lg font-bold text-parch-100">
-              {record.name}
-            </h3>
-            <p className="text-xs text-parch-500">
-              {kind === 'player' ? 'Игрок' : 'Герой'} · {record.games} матчей
-            </p>
-          </div>
-          <button className="btn btn-ghost px-2.5 py-1.5" onClick={onClose} aria-label="Закрыть">
-            ✕
-          </button>
-        </header>
-
-        <div className="space-y-5 p-5">
-          <div className="grid grid-cols-3 gap-3">
-            <Stat label="Победы" value={record.wins} tone="text-emerald-400" />
-            <Stat label="Поражения" value={record.losses} tone="text-crimson-400" />
-            <Stat label="Винрейт" value={formatPct(record.winRate)} tone="text-gold-400" />
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div className="rounded-lg border border-ink-700 bg-ink-900 p-3">
-              <p className="stat-label">1 vs 1</p>
-              <p className="mt-1 text-lg font-bold text-parch-100">
-                {record.games1v1}{' '}
-                <span className="text-xs font-normal text-parch-500">матчей</span>
-              </p>
-              {wr1v1 !== null ? (
-                <p className="mt-0.5 text-xs text-gold-400">Винрейт {formatPct(wr1v1)}</p>
-              ) : null}
-            </div>
-            <div className="rounded-lg border border-ink-700 bg-ink-900 p-3">
-              <p className="stat-label">2 vs 2</p>
-              <p className="mt-1 text-lg font-bold text-parch-100">
-                {record.games2v2}{' '}
-                <span className="text-xs font-normal text-parch-500">матчей</span>
-              </p>
-              {wr2v2 !== null ? (
-                <p className="mt-0.5 text-xs text-gold-400">Винрейт {formatPct(wr2v2)}</p>
-              ) : null}
-            </div>
-          </div>
-
-          {record.dualGames > 0 ? (
-            <div className="rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2.5">
-              <p className="text-xs text-violet-400">
-                В <b>{record.dualGames}</b> матчах игрок вёл сразу двух героев против двух
-                соперников. Такой матч засчитывается один раз, а оба героя засчитываются за
-                игрока.
-              </p>
-            </div>
-          ) : null}
-
-          {record.topHeroes.length > 0 && kind === 'player' ? (
-            <div>
-              <p className="stat-label mb-2">Любимые герои</p>
-              <ul className="space-y-1.5">
-                {record.topHeroes.map((hero) => (
-                  <li
-                    key={hero.name}
-                    className="flex items-center justify-between rounded-lg border border-ink-700 bg-ink-900 px-3 py-2"
-                  >
-                    <span className="text-sm text-parch-100">{hero.name}</span>
-                    <span className="flex items-center gap-2 text-xs">
-                      <span className="text-parch-500">{hero.games} игр</span>
-                      <Chip tone={hero.winRate >= 0.5 ? 'emerald' : 'crimson'}>
-                        {formatPct(hero.winRate)}
-                      </Chip>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-
-          {record.topMaps.length > 0 ? (
-            <div>
-              <p className="stat-label mb-2">Любимые поля</p>
-              <ul className="space-y-1.5">
-                {record.topMaps.map((map) => (
-                  <li
-                    key={map.name}
-                    className="flex items-center justify-between rounded-lg border border-ink-700 bg-ink-900 px-3 py-2"
-                  >
-                    <span className="text-sm text-parch-100">{map.name}</span>
-                    <span className="text-xs text-parch-500">{map.games} игр</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          ) : null}
-        </div>
-      </div>
-    </>
-  );
-}
-
-function Stat({
-  label,
-  value,
-  tone,
-}: {
-  label: string;
-  value: React.ReactNode;
-  tone: string;
-}) {
-  return (
-    <div className="rounded-lg border border-ink-700 bg-ink-900 p-3 text-center">
-      <p className="stat-label">{label}</p>
-      <p className={`mt-1 text-xl font-bold ${tone}`}>{value}</p>
-    </div>
   );
 }

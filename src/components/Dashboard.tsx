@@ -1,7 +1,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import { MatchesTimeline, ModeSplitChart, VerticalBars, WinRateRanking } from './charts';
+import { MatchesTimeline, ModeSplitChart, WinRateRanking } from './charts';
 import { EntityTable } from './EntityTable';
 import { HeroAvatar } from './HeroModal';
 import { PlayerAvatar, PlayerLink } from './PlayerModal';
@@ -19,13 +19,14 @@ import {
   formatDate,
   formatPct,
 } from './ui';
-import { isHomebrew } from '@/lib/normalize';
+import { isHomebrew, mapKey } from '@/lib/normalize';
+import { matchRecency } from '@/lib/results';
 import {
   MIN_GAMES_FOR_HERO_RATE,
   MIN_GAMES_FOR_PLAYER_RATE,
   computeStats,
 } from '@/lib/stats';
-import { UNSPECIFIED_MAP, type AppData, type PairSynergy } from '@/lib/types';
+import { UNSPECIFIED_MAP, type AppData, type Match, type PairSynergy } from '@/lib/types';
 
 type Tab = 'overview' | 'players' | 'heroes' | 'pairs' | 'maps';
 
@@ -193,11 +194,6 @@ function DashboardHeader({
 /* -------------------------------------------------------------------------- */
 
 function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
-  const mapChartData = useMemo(
-    () => stats.maps.slice(0, 12).map((m) => ({ name: m.name, value: m.matches })),
-    [stats.maps],
-  );
-
   const bestHeroPair = stats.bestHeroSynergy[0] ?? null;
   const bestPlayerPair = stats.bestPlayerSynergy[0] ?? null;
 
@@ -227,13 +223,6 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
           </div>
         </StatCard>
 
-        <StatCard
-          label="Количество уникальных игроков"
-          value={stats.totals.uniquePlayers}
-          sub="разных имён за всю историю матчей"
-          accent="azure"
-        />
-
         {/* Replaces the old "общий винрейт" card, which was always ~50 %. */}
         <StatCard
           label="Самый активный игрок"
@@ -246,12 +235,12 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
               <p className="stat-label">Топ-3 героя</p>
               <ul className="mt-1 space-y-1">
                 {mostActive.topHeroes.slice(0, 3).map((hero) => (
-                  <li key={hero.name} className="flex items-center gap-1.5">
-                    <HeroAvatar name={hero.name} size={18} rounded="rounded-md" />
-                    <span className="min-w-0 flex-1 truncate text-xs text-parch-300">
+                  <li key={hero.name} className="flex items-center gap-2">
+                    <HeroAvatar name={hero.name} size={22} rounded="rounded-md" />
+                    <span className="min-w-0 flex-1 truncate text-sm text-parch-200">
                       {hero.name}
                     </span>
-                    <span className="shrink-0 text-xs tabular-nums text-parch-500">
+                    <span className="shrink-0 text-sm tabular-nums text-parch-400">
                       {hero.games} игр
                     </span>
                   </li>
@@ -272,10 +261,20 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
           accent="emerald"
         >
           {bestPlayer ? (
-            <p className="mt-2 text-[11px] leading-relaxed text-parch-400">
-              1v1: {bestPlayer.games1v1} игр ({formatPct(bestPlayer.winRate1v1)}) | 2v2:{' '}
-              {bestPlayer.games2v2} игр ({formatPct(bestPlayer.winRate2v2)})
-            </p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <ModeSplit
+                label="1 vs 1"
+                games={bestPlayer.games1v1}
+                winRate={bestPlayer.winRate1v1}
+                color={AZURE}
+              />
+              <ModeSplit
+                label="2 vs 2"
+                games={bestPlayer.games2v2}
+                winRate={bestPlayer.winRate2v2}
+                color={GOLD}
+              />
+            </div>
           ) : null}
         </StatCard>
 
@@ -322,45 +321,82 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
               <MapArt
                 name={stats.mostPopularMap.name}
                 image={stats.mostPopularMap.image}
-                className="h-24 w-full"
+                className="h-20 w-full"
                 rounded="rounded-lg"
               />
             </div>
           ) : null}
+          {stats.mostPopularMap?.topWinningHero ? (
+            <div
+              className="mt-2 flex items-center gap-2 rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-1.5"
+              title="Герой, который выигрывает на этом поле чаще всего"
+            >
+              <HeroAvatar
+                name={stats.mostPopularMap.topWinningHero.name}
+                size={24}
+                rounded="rounded-md"
+              />
+              <span className="min-w-0 flex-1 truncate text-xs text-parch-300">
+                {stats.mostPopularMap.topWinningHero.name}
+              </span>
+              <span className="shrink-0 text-xs tabular-nums text-parch-500">
+                {stats.mostPopularMap.topWinningHero.wins}/
+                {stats.mostPopularMap.topWinningHero.games}
+              </span>
+            </div>
+          ) : null}
         </StatCard>
 
-        {/* Total / official / fan breakdown — spans two columns so the
-            seven KPI cards fill the four-column grid evenly. */}
+        {/* Players and heroes in one card — the unique-player count used to
+            live in a card of its own and left the row half empty. */}
         <StatCard
-          label="Уникальных героев"
-          value={stats.heroBreakdown.total}
+          label="Уникальные игроки и герои"
+          value={stats.totals.uniquePlayers}
+          sub={`разных игроков · ${stats.heroBreakdown.total} героев за всю историю`}
           accent="gold"
-          className="xl:col-span-2"
+          className="lg:col-span-3"
         >
-          <div className="mt-2 grid gap-x-4 gap-y-1 sm:grid-cols-2">
-            <div className="space-y-1">
-              <MiniStat label="Официальные" value={stats.heroBreakdown.official} />
-              <MiniStat
-                label="Матчей с официальными"
-                value={stats.heroBreakdown.officialMatches}
-                tone="text-azure-400"
-                hint="Матчи, где участвовал хотя бы один официальный герой"
-              />
-            </div>
-            <div className="space-y-1">
-              <MiniStat
-                label="Фан-персонажи"
-                value={stats.heroBreakdown.homebrew}
-                tone="text-violet-400"
-                hint="Персонажи с пометкой «(фан)»"
-              />
-              <MiniStat
-                label="Матчей с фан-героями"
-                value={stats.heroBreakdown.homebrewMatches}
-                tone="text-violet-400"
-                hint="Матчи, где участвовал хотя бы один фан-герой"
-              />
-            </div>
+          <div className="mt-3 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+            <MiniStat
+              stacked
+              label="Уникальных игроков"
+              value={stats.totals.uniquePlayers}
+              tone="text-gold-400"
+              hint="Разных имён игроков за всю историю матчей"
+            />
+            <MiniStat
+              stacked
+              label="Официальные герои"
+              value={stats.heroBreakdown.official}
+              hint="Персонажи без пометки «(фан)»"
+            />
+            <MiniStat
+              stacked
+              label="Фан-персонажи"
+              value={stats.heroBreakdown.homebrew}
+              tone="text-violet-400"
+              hint="Персонажи с пометкой «(фан)»"
+            />
+            <MiniStat
+              stacked
+              label="Матчей с официальными"
+              value={stats.heroBreakdown.officialMatches}
+              tone="text-azure-400"
+              hint="Матчи, где участвовал хотя бы один официальный герой"
+            />
+            <MiniStat
+              stacked
+              label="Матчей с фан-героями"
+              value={stats.heroBreakdown.homebrewMatches}
+              tone="text-violet-400"
+              hint="Матчи, где участвовал хотя бы один фан-герой"
+            />
+            <MiniStat
+              stacked
+              label="Всего матчей"
+              value={stats.totals.validMatches}
+              hint="Учитываются только структурно корректные строки"
+            />
           </div>
         </StatCard>
       </div>
@@ -440,19 +476,14 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
         </Panel>
       </div>
 
-      {/* Map popularity + recent matches */}
-      <div className="grid gap-4 xl:grid-cols-3">
-        <Panel
-          title="Самые популярные поля"
-          subtitle="Топ-12 по числу матчей"
-          className="xl:col-span-2"
-        >
-          <VerticalBars data={mapChartData} />
-        </Panel>
-        <Panel title="Последние матчи" subtitle="По дате записи">
-          <RecentMatches data={data} />
-        </Panel>
-      </div>
+      {/* Recent matches — the map popularity chart was replaced by this feed */}
+      <Panel
+        title="Последние матчи"
+        subtitle="Новейшие записи в таблице: режим, дата, игроки с героями и поле боя"
+        action={<Chip tone="gold">{stats.totals.validMatches} всего</Chip>}
+      >
+        <RecentMatches data={data} limit={14} />
+      </Panel>
 
       <DataQualityPanel stats={stats} />
     </div>
@@ -473,12 +504,12 @@ function ModeSplit({
 }) {
   return (
     <div className="rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-2">
-      <p className="flex items-center gap-1.5 text-[0.68rem] font-semibold uppercase tracking-wide text-parch-500">
+      <p className="flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-parch-400">
         <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: color }} />
         {label}
       </p>
-      <p className="mt-0.5 text-sm font-bold tabular-nums text-parch-100">{games} игр</p>
-      <p className="text-xs tabular-nums" style={{ color }}>
+      <p className="mt-1 text-base font-bold tabular-nums text-parch-100">{games} игр</p>
+      <p className="mt-0.5 text-sm tabular-nums" style={{ color }}>
         винрейт {formatPct(winRate)}
       </p>
     </div>
@@ -530,24 +561,25 @@ function TopMapsSection({ stats }: { stats: AppData['stats'] }) {
               <h3 className="text-lg font-bold leading-tight tracking-tight text-parch-100 drop-shadow">
                 {map.name}
               </h3>
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-parch-400">
-                <span>винрейт полей {formatPct(map.winRate)}</span>
-                <span className="text-parch-600">·</span>
-                <span>первый ход {formatPct(map.firstTurnWinRate)}</span>
-              </div>
-              <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+              <div className="mt-2.5 flex flex-wrap items-center gap-2 text-xs">
                 {map.topHero ? (
-                  <span className="flex items-center gap-1.5 rounded-full bg-ink-950/60 px-2 py-1">
-                    <Avatar name={map.topHero.name} size={18} rounded="rounded-full" />
-                    <span className="text-parch-300">{map.topHero.name}</span>
-                    <span className="text-parch-600">{map.topHero.games}</span>
+                  <span
+                    className="flex items-center gap-1.5 rounded-full bg-ink-950/70 px-2 py-1"
+                    title={`Самый частый герой на этом поле: ${map.topHero.games} игр`}
+                  >
+                    <HeroAvatar name={map.topHero.name} size={20} rounded="rounded-full" />
+                    <span className="text-parch-200">{map.topHero.name}</span>
+                    <span className="tabular-nums text-parch-500">{map.topHero.games}</span>
                   </span>
                 ) : null}
                 {map.topPlayer ? (
-                  <span className="flex items-center gap-1.5 rounded-full bg-ink-950/60 px-2 py-1">
-                    <PlayerAvatar name={map.topPlayer.name} size={18} rounded="rounded-full" />
-                    <PlayerLink name={map.topPlayer.name} className="text-parch-300" />
-                    <span className="text-parch-600">
+                  <span
+                    className="flex items-center gap-1.5 rounded-full bg-ink-950/70 px-2 py-1"
+                    title={`Лучший игрок на этом поле: ${map.topPlayer.wins} побед из ${map.topPlayer.games}`}
+                  >
+                    <PlayerAvatar name={map.topPlayer.name} size={20} rounded="rounded-full" />
+                    <PlayerLink name={map.topPlayer.name} className="text-parch-200" />
+                    <span className="tabular-nums text-parch-500">
                       {map.topPlayer.wins}/{map.topPlayer.games}
                     </span>
                   </span>
@@ -875,10 +907,11 @@ function MapsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) 
       </Panel>
 
       <div className="space-y-4">
-        <Panel title="Популярность" subtitle="Топ-12 полей по числу матчей">
-          <VerticalBars
-            data={counts.slice(0, 12).map((c) => ({ name: c.name, value: c.matches }))}
-          />
+        <Panel
+          title="Последние матчи"
+          subtitle="Новейшие записи: режим, игроки, герои и поле боя"
+        >
+          <RecentMatches data={data} limit={8} />
         </Panel>
 
         {unmapped > 0 ? (
@@ -1021,69 +1054,138 @@ function DataQualityPanel({ stats }: { stats: AppData['stats'] }) {
 
 /* -------------------------------------------------------------------------- */
 
-function RecentMatches({ data }: { data: AppData }) {
+/* ---------------------------------------------------------------------------
+   Recent matches feed.
+
+   Every entry shows the mode, the date, both sides of the match (player +
+   hero) and the battlefield. Avatars are the real pictures from the IMAGES
+   tab — they resolve themselves, so no caller can forget the URL.
+--------------------------------------------------------------------------- */
+
+function RecentMatches({ data, limit = 14 }: { data: AppData; limit?: number }) {
   const recent = useMemo(() => {
     return [...data.matches]
       .filter((m) => m.valid)
-      .sort((a, b) => {
-        if (a.timestamp && b.timestamp) return b.timestamp.localeCompare(a.timestamp);
-        if (a.timestamp) return -1;
-        if (b.timestamp) return 1;
-        return b.rowNumber - a.rowNumber;
-      })
-      .slice(0, 12);
-  }, [data.matches]);
+      .sort((a, b) => matchRecency(b) - matchRecency(a))
+      .slice(0, limit);
+  }, [data.matches, limit]);
+
+  // Battlefield artwork, keyed by the normalized battlefield name.
+  const mapImages = useMemo(() => {
+    const map = new Map<string, string | null>();
+    for (const entry of data.reference.maps) {
+      map.set(mapKey(entry.name), entry.image ?? null);
+    }
+    return map;
+  }, [data.reference.maps]);
 
   if (recent.length === 0) return <EmptyState message="Нет матчей" />;
 
   return (
-    <ul className="space-y-1.5">
+    <ul className="grid gap-2.5 md:grid-cols-2">
       {recent.map((match) => (
         <li
           key={match.id}
-          className="rounded-lg border border-ink-700 bg-ink-900 px-3 py-2 text-xs"
+          className="flex flex-col gap-2 rounded-xl border border-ink-700 bg-ink-900 px-3 py-2.5"
         >
+          {/* Mode + date */}
           <div className="flex items-center justify-between gap-2">
-            <div className="flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
               <Chip tone={match.mode === '1v1' ? 'azure' : 'violet'}>
                 {match.mode === '1v1' ? '1 vs 1' : '2 vs 2'}
               </Chip>
               {match.dualControl.length > 0 ? (
-                <Chip tone="violet">1 игрок · 2 героя</Chip>
+                <Chip tone="violet" title="Один игрок вёл обоих героев">
+                  1 игрок · 2 героя
+                </Chip>
               ) : null}
             </div>
-            <span className="text-parch-600">{formatDate(match.timestamp)}</span>
+            <span className="shrink-0 text-xs tabular-nums text-parch-500">
+              {formatDate(match.timestamp)}
+            </span>
           </div>
-          <p className="mt-1.5 text-parch-300">
-            {match.mode === '1v1' ? (
+
+          {/* Both sides */}
+          <div className="flex items-center gap-2">
+            <MatchSide match={match} team={1} />
+            <span className="shrink-0 text-[0.65rem] font-semibold uppercase tracking-wide text-parch-600">
+              против
+            </span>
+            <MatchSide match={match} team={2} />
+          </div>
+
+          {/* Battlefield */}
+          <p className="mt-auto flex items-center gap-2 text-xs text-parch-500">
+            {match.map ? (
               <>
-                <PlayerLink name={match.players[0]} /> ({match.heroes[0]}){' '}
-                <span className="text-parch-600">против</span> <PlayerLink name={match.players[1]} /> (
-                {match.heroes[1]})
+                {mapImages.get(mapKey(match.map)) ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={mapImages.get(mapKey(match.map)) as string}
+                    alt=""
+                    loading="lazy"
+                    className="h-5 w-5 shrink-0 rounded border border-ink-600 object-cover"
+                  />
+                ) : (
+                  <span
+                    className="h-5 w-5 shrink-0 rounded border border-ink-600 bg-ink-800"
+                    aria-hidden
+                  />
+                )}
+                <span className="min-w-0 truncate">{match.map}</span>
               </>
             ) : (
-              <>
-                {match.team1Players.map((player, index) => (
-                  <span key={`${player}-${index}`}>
-                    <PlayerLink name={player} />
-                    {index < match.team1Players.length - 1 ? ' + ' : ''}
-                  </span>
-                ))}{' '}
-                <span className="text-parch-600">против</span>{' '}
-                {match.team2Players.map((player, index) => (
-                  <span key={`${player}-${index}`}>
-                    <PlayerLink name={player} />
-                    {index < match.team2Players.length - 1 ? ' + ' : ''}
-                  </span>
-                ))}
-              </>
+              <span className="text-parch-600">{UNSPECIFIED_MAP}</span>
             )}
-          </p>
-          <p className="mt-0.5 text-parch-600">
-            📍 {match.map ?? UNSPECIFIED_MAP}
           </p>
         </li>
       ))}
     </ul>
+  );
+}
+
+/**
+ * One side of a match: the players and their heroes.
+ *
+ * In 1 vs 1 a side is a single player; in 2 vs 2 it is the whole team.
+ */
+function MatchSide({ match, team }: { match: Match; team: 1 | 2 }) {
+  // In 1 vs 1 the teams are not filled in — the two seats are the sides.
+  const list =
+    team === 1
+      ? match.team1Players.length > 0
+        ? match.team1Players
+        : [match.players[0] ?? '']
+      : match.team2Players.length > 0
+        ? match.team2Players
+        : [match.players[1] ?? ''];
+  const heroes =
+    team === 1
+      ? match.team1Heroes.length > 0
+        ? match.team1Heroes
+        : [match.heroes[0] ?? '']
+      : match.team2Heroes.length > 0
+        ? match.team2Heroes
+        : [match.heroes[1] ?? ''];
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-1">
+      {list.map((player, index) => (
+        <div key={`${player}-${index}`} className="flex min-w-0 items-center gap-1.5">
+          <PlayerAvatar name={player} size={22} rounded="rounded-md" />
+          <span className="min-w-0 flex-1 truncate text-xs text-parch-200">
+            <PlayerLink name={player} />
+          </span>
+          {heroes[index] ? (
+            <span className="flex min-w-0 items-center gap-1" title={heroes[index]}>
+              <HeroAvatar name={heroes[index]} size={20} rounded="rounded" />
+              <span className="hidden truncate text-[0.7rem] text-parch-500 sm:inline">
+                {heroes[index]}
+              </span>
+            </span>
+          ) : null}
+        </div>
+      ))}
+    </div>
   );
 }

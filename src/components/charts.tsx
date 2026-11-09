@@ -232,41 +232,6 @@ export function WinRateRanking({
   );
 }
 
-/** Vertical bar chart, used for map popularity. */
-export function VerticalBars({
-  data,
-  color = AZURE,
-}: {
-  data: Array<{ name: string; value: number }>;
-  color?: string;
-}) {
-  if (data.length === 0) {
-    return <p className="py-8 text-center text-sm text-parch-500">Нет данных</p>;
-  }
-  return (
-    <ResponsiveContainer width="100%" height={300}>
-      <BarChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 60 }}>
-        <XAxis
-          dataKey="name"
-          tickLine={false}
-          axisLine={false}
-          angle={-38}
-          textAnchor="end"
-          interval={0}
-          height={70}
-          tick={{ fontSize: 10, fill: 'var(--color-parch-500)' }}
-        />
-        <YAxis tickLine={false} axisLine={false} allowDecimals={false} />
-        <Tooltip
-          content={<DarkTooltip />}
-          cursor={{ fill: 'rgba(217,160,60,0.06)' }}
-        />
-        <Bar dataKey="value" name="Матчей" radius={[6, 6, 0, 0]} fill={color} fillOpacity={0.85} />
-      </BarChart>
-    </ResponsiveContainer>
-  );
-}
-
 /** Sparkline-style line for a player's recent form. */
 export function TrendLine({
   data,

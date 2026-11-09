@@ -135,6 +135,8 @@ export interface MapStats {
   balance: number;
   /** Hero played most often on this battlefield. */
   topHero: { name: string; games: number } | null;
+  /** Hero that won most often on this battlefield. */
+  topWinningHero: { name: string; wins: number; games: number } | null;
   /** Player who won most often on this battlefield. */
   topPlayer: { name: string; wins: number; games: number } | null;
 }
@@ -183,12 +185,22 @@ export interface HeroProfile {
   winRate2v2: number;
   /** Share of all matches the hero was picked in (0..1). */
   pickRate: number;
-  /** Hero this hero beats most often. */
+  /** Hero this hero beats most often (all modes together). */
   bestVictim: OpponentStat | null;
-  /** Hero that beats this hero most often. */
+  /** Hero that beats this hero most often (all modes together). */
   worstEnemy: OpponentStat | null;
+  /** Nemesis in 1 vs 1 — the opponent with the lowest win rate for this hero. */
+  worstEnemy1v1: OpponentStat | null;
+  /** Best victim in 1 vs 1 — the opponent with the highest win rate for this hero. */
+  bestVictim1v1: OpponentStat | null;
+  /** Nemesis in 2 vs 2 — the opponent with the lowest win rate for this hero. */
+  worstEnemy2v2: OpponentStat | null;
+  /** Best victim in 2 vs 2 — the opponent with the highest win rate for this hero. */
+  bestVictim2v2: OpponentStat | null;
   /** Battlefield this hero plays on most. */
   favoriteMap: { name: string; games: number; image?: string | null } | null;
+  /** Battlefields this hero plays on, most played first. */
+  topMaps: Array<{ name: string; games: number }>;
   /** Teammate with the best combined win rate. */
   bestSynergy: PairSynergy | null;
   /** Teammate with the worst combined win rate. */
@@ -197,6 +209,10 @@ export interface HeroProfile {
   nemesis: OpponentStat[];
   /** Every opponent, worst first. */
   victims: OpponentStat[];
+  /** Every 1 vs 1 opponent, worst first. */
+  opponents1v1: OpponentStat[];
+  /** Every 2 vs 2 opponent, worst first. */
+  opponents2v2: OpponentStat[];
 }
 
 /** First-turn balance for one mode. */
@@ -271,7 +287,14 @@ export interface DashboardStats {
   /** Hero with the highest number of games played. */
   mostPlayedHero: DetailedRecord | null;
   /** Map used in the most matches (never an unknown/unnamed battlefield). */
-  mostPopularMap: { name: string; games: number; winRate: number; image?: string | null } | null;
+  mostPopularMap: {
+    name: string;
+    games: number;
+    winRate: number;
+    image?: string | null;
+    /** Hero that wins most often on this battlefield. */
+    topWinningHero?: { name: string; wins: number; games: number } | null;
+  } | null;
   /** Per-map statistics, sorted by number of matches. */
   maps: MapStats[];
   /** Highest win-rate hero duo in 2v2. */
