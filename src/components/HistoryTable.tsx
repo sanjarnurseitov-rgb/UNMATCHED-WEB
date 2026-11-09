@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Avatar, Chip, EmptyState, Panel, formatDate } from './ui';
 import { HeroAvatar } from './HeroModal';
+import { PlayerAvatar, PlayerLink } from './PlayerModal';
 import { UNSPECIFIED_MAP, type AppData, type Match } from '@/lib/types';
 
 const PAGE_SIZE = 24;
@@ -321,8 +322,13 @@ function TeamColumn({
       <ul className="space-y-1.5">
         {players.map((player, index) => (
           <li key={`${player}-${index}`} className="flex items-center gap-2">
-            <Avatar name={player} image={playerImages[player] ?? null} size={26} rounded="rounded-md" />
-            <span className="min-w-0 flex-1 truncate text-sm text-parch-100">{player}</span>
+            <PlayerAvatar
+              name={player}
+              image={playerImages[player] ?? null}
+              size={26}
+              rounded="rounded-md"
+            />
+            <PlayerLink name={player} className="min-w-0 flex-1 truncate text-sm text-parch-100" />
             <span className="text-parch-600">·</span>
             <HeroAvatar
               name={heroes[index] ?? ''}
@@ -416,7 +422,12 @@ function MatchListRow({
             <span className={seat.won ? 'text-emerald-400' : 'text-crimson-400'}>
               {seat.won ? '★' : '☆'}
             </span>
-            <Avatar name={seat.player} image={playerImages[seat.player] ?? null} size={18} rounded="rounded" />
+            <PlayerAvatar
+              name={seat.player}
+              image={playerImages[seat.player] ?? null}
+              size={18}
+              rounded="rounded"
+            />
             <span className="text-parch-200">{seat.player}</span>
             <span className="text-parch-600">·</span>
             <HeroAvatar name={seat.hero} image={heroImages[seat.hero] ?? null} size={18} rounded="rounded" />

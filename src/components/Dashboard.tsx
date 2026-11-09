@@ -4,6 +4,7 @@ import { useMemo, useState } from 'react';
 import { MatchesTimeline, ModeSplitChart, VerticalBars, WinRateRanking } from './charts';
 import { EntityTable } from './EntityTable';
 import { HeroAvatar } from './HeroModal';
+import { PlayerAvatar, PlayerLink } from './PlayerModal';
 import {
   Avatar,
   Chip,
@@ -52,10 +53,17 @@ export function Dashboard({ data }: { data: AppData }) {
    */
   const stats = useMemo(() => {
     if (!hideFan) return data.stats;
-    return computeStats(data.matches, data.reference, {
+    const filtered = computeStats(data.matches, data.reference, {
       excludeHeroes: (hero) => isHomebrew(hero),
       rejectedRows: data.stats.rejectedRows,
     });
+    /*
+     * The self-check describes the underlying history, not the filter, so it
+     * survives a filter change — the curated cross-check is not recomputed in
+     * the browser.
+     */
+    filtered.consistency = data.stats.consistency;
+    return filtered;
   }, [hideFan, data]);
 
   const fanCount = useMemo(
@@ -229,28 +237,54 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
         {/* Replaces the old "общий винрейт" card, which was always ~50 %. */}
         <StatCard
           label="Самый активный игрок"
-          value={mostActive?.name ?? '—'}
+          value={mostActive ? <PlayerLink name={mostActive.name} /> : '—'}
           sub={mostActive ? `${mostActive.games} матчей · винрейт ${formatPct(mostActive.winRate)}` : undefined}
           accent="violet"
-        />
+        >
+          {mostActive && mostActive.topHeroes.length > 0 ? (
+            <div className="mt-2">
+              <p className="stat-label">Топ-3 героя</p>
+              <ul className="mt-1 space-y-1">
+                {mostActive.topHeroes.slice(0, 3).map((hero) => (
+                  <li key={hero.name} className="flex items-center gap-1.5">
+                    <HeroAvatar name={hero.name} size={18} rounded="rounded-md" />
+                    <span className="min-w-0 flex-1 truncate text-xs text-parch-300">
+                      {hero.name}
+                    </span>
+                    <span className="shrink-0 text-xs tabular-nums text-parch-500">
+                      {hero.games} игр
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </StatCard>
 
         <StatCard
           label="Лучший игрок по винрейту"
-          value={bestPlayer?.name ?? '—'}
+          value={bestPlayer ? <PlayerLink name={bestPlayer.name} /> : '—'}
           sub={
             bestPlayer
               ? `винрейт ${formatPct(bestPlayer.winRate)} · ${bestPlayer.games} матчей`
               : undefined
           }
           accent="emerald"
-        />
+        >
+          {bestPlayer ? (
+            <p className="mt-2 text-[11px] leading-relaxed text-parch-400">
+              1v1: {bestPlayer.games1v1} игр ({formatPct(bestPlayer.winRate1v1)}) | 2v2:{' '}
+              {bestPlayer.games2v2} игр ({formatPct(bestPlayer.winRate2v2)})
+            </p>
+          ) : null}
+        </StatCard>
 
         <StatCard
           label="Самый частый герой"
           value={stats.mostPlayedHero?.name ?? '—'}
           sub={
             stats.mostPlayedHero
-              ? `1v1: ${stats.mostPlayedHero.games1v1} игр (${formatPct(
+              ? `всего ${stats.mostPlayedHero.games} матчей · 1v1: ${stats.mostPlayedHero.games1v1} игр (${formatPct(
                   stats.mostPlayedHero.winRate1v1,
                 )}) | 2v2: ${stats.mostPlayedHero.games2v2} игр (${formatPct(
                   stats.mostPlayedHero.winRate2v2,
@@ -282,7 +316,18 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
           value={stats.mostPopularMap?.name ?? '—'}
           sub={stats.mostPopularMap ? `${stats.mostPopularMap.games} матчей` : undefined}
           accent="azure"
-        />
+        >
+          {stats.mostPopularMap?.image ? (
+            <div className="mt-2">
+              <MapArt
+                name={stats.mostPopularMap.name}
+                image={stats.mostPopularMap.image}
+                className="h-24 w-full"
+                rounded="rounded-lg"
+              />
+            </div>
+          ) : null}
+        </StatCard>
 
         {/* Total / official / fan breakdown — spans two columns so the
             seven KPI cards fill the four-column grid evenly. */}
@@ -500,8 +545,8 @@ function TopMapsSection({ stats }: { stats: AppData['stats'] }) {
                 ) : null}
                 {map.topPlayer ? (
                   <span className="flex items-center gap-1.5 rounded-full bg-ink-950/60 px-2 py-1">
-                    <Avatar name={map.topPlayer.name} size={18} rounded="rounded-full" />
-                    <span className="text-parch-300">{map.topPlayer.name}</span>
+                    <PlayerAvatar name={map.topPlayer.name} size={18} rounded="rounded-full" />
+                    <PlayerLink name={map.topPlayer.name} className="text-parch-300" />
                     <span className="text-parch-600">
                       {map.topPlayer.wins}/{map.topPlayer.games}
                     </span>
@@ -580,7 +625,7 @@ function PairsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] })
         title="Синергия игроков · 2 vs 2"
         subtitle="Оба игрока были в одной команде"
       >
-        <SynergyTable pairs={stats.bestPlayerSynergy} images={playerImages} />
+        <SynergyTable pairs={stats.bestPlayerSynergy} images={playerImages} kind="player" />
       </Panel>
 
       <Panel
@@ -597,8 +642,15 @@ function PairsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] })
                 key={`${combo.player}|${combo.hero}`}
                 className="flex items-center gap-3 rounded-lg border border-ink-700 bg-ink-900 px-3 py-2"
               >
-                <Avatar name={combo.player} image={playerImages[combo.player] ?? null} size={28} />
-                <span className="min-w-0 flex-1 truncate text-sm text-parch-100">{combo.player}</span>
+                <PlayerAvatar
+                  name={combo.player}
+                  image={playerImages[combo.player] ?? null}
+                  size={28}
+                />
+                <PlayerLink
+                  name={combo.player}
+                  className="min-w-0 flex-1 truncate text-sm text-parch-100"
+                />
                 <span className="text-parch-600">›</span>
                 <Avatar name={combo.hero} image={heroImages[combo.hero] ?? null} size={28} />
                 <span className="min-w-0 flex-1 truncate text-sm text-parch-300">{combo.hero}</span>
@@ -632,7 +684,8 @@ function PairsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] })
                 {stats.headToHead.map((h) => (
                   <tr key={`${h.a}|${h.b}`} className="border-b border-ink-800/70">
                     <td className="py-2 pr-3 text-parch-100">
-                      {h.a} <span className="text-parch-600">против</span> {h.b}
+                      <PlayerLink name={h.a} />{' '}
+                      <span className="text-parch-600">против</span> <PlayerLink name={h.b} />
                     </td>
                     <td className="py-2 pr-3 text-right tabular-nums text-parch-300">{h.games}</td>
                     <td className="py-2 pr-3 text-right tabular-nums">
@@ -654,9 +707,11 @@ function PairsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] })
 function SynergyTable({
   pairs,
   images,
+  kind = 'hero',
 }: {
   pairs: PairSynergy[];
   images: Record<string, string | null>;
+  kind?: 'hero' | 'player';
 }) {
   if (pairs.length === 0) {
     return <EmptyState message="Недостаточно данных для расчёта синергий" />;
@@ -680,17 +735,38 @@ function SynergyTable({
               <td className="py-2 pr-3">
                 <div className="flex items-center gap-2">
                   <span className="flex -space-x-2">
-                    {pair.members.map((name) => (
-                      <Avatar
-                        key={name}
-                        name={name}
-                        image={images[name] ?? null}
-                        size={24}
-                        rounded="rounded-md ring-2 ring-ink-850"
-                      />
-                    ))}
+                    {pair.members.map((name) =>
+                      kind === 'player' ? (
+                        <PlayerAvatar
+                          key={name}
+                          name={name}
+                          image={images[name] ?? null}
+                          size={24}
+                          rounded="rounded-md ring-2 ring-ink-850"
+                        />
+                      ) : (
+                        <HeroAvatar
+                          key={name}
+                          name={name}
+                          image={images[name] ?? null}
+                          size={24}
+                          rounded="rounded-md ring-2 ring-ink-850"
+                        />
+                      ),
+                    )}
                   </span>
-                  <span className="text-parch-100">{pair.members.join(' + ')}</span>
+                  {kind === 'player' ? (
+                    <span className="text-parch-100">
+                      {pair.members.map((member, index) => (
+                        <span key={member}>
+                          <PlayerLink name={member} />
+                          {index < pair.members.length - 1 ? ' + ' : ''}
+                        </span>
+                      ))}
+                    </span>
+                  ) : (
+                    <span className="text-parch-100">{pair.members.join(' + ')}</span>
+                  )}
                 </div>
               </td>
               <td className="py-2 pr-3 text-right tabular-nums text-parch-300">{pair.games}</td>
@@ -746,7 +822,17 @@ function MapsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) 
                 {counts.map((entry, index) => (
                   <tr key={entry.name} className="border-b border-ink-800/70">
                     <td className="py-2 pr-3 text-xs text-parch-600">{index + 1}</td>
-                    <td className="py-2 pr-3 text-parch-100">{entry.name}</td>
+                    <td className="py-2 pr-3">
+                      <span className="flex items-center gap-2">
+                        <MapArt
+                          name={entry.name}
+                          image={entry.image}
+                          className="h-8 w-8 shrink-0"
+                          rounded="rounded-md"
+                        />
+                        <span className="text-parch-100">{entry.name}</span>
+                      </span>
+                    </td>
                     <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
                       {entry.matches}
                     </td>
@@ -770,7 +856,7 @@ function MapsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) 
                     <td className="py-2 pr-3">
                       {entry.topPlayer ? (
                         <span className="flex items-center gap-2">
-                          <Avatar name={entry.topPlayer.name} size={22} />
+                          <PlayerAvatar name={entry.topPlayer.name} size={22} />
                           <span className="text-xs text-parch-300">{entry.topPlayer.name}</span>
                           <span className="text-xs text-parch-600">
                             {entry.topPlayer.wins}/{entry.topPlayer.games}
@@ -813,38 +899,121 @@ function MapsPanel({ data, stats }: { data: AppData; stats: AppData['stats'] }) 
 /* -------------------------------------------------------------------------- */
 
 /**
- * Surfaces the rows that could not be counted, so the table can be cleaned up
- * instead of silently losing games.
+ * Surfaces the rows that could not be counted and the result of the
+ * aggregation self-check, so the table can be cleaned up instead of silently
+ * losing games.
  */
 function DataQualityPanel({ stats }: { stats: AppData['stats'] }) {
   const hasIssues = stats.rejectedRows.length > 0;
-  if (!hasIssues) return null;
+  const consistency = stats.consistency;
+  const heroMismatches = consistency.crossCheck.heroes.mismatches;
+  const playerMismatches = consistency.crossCheck.players.mismatches;
+  const hasConsistencyIssues =
+    !consistency.heroTotalsOk || heroMismatches.length > 0 || playerMismatches.length > 0;
 
   return (
     <Panel
       title="Качество данных"
-      subtitle="Строки в таблице, которые обработаны особым образом"
-      action={<Chip tone="gold">К гигиене таблицы</Chip>}
+      subtitle="Проверка агрегации и строки, обработанные особым образом"
+      action={<Chip tone={hasConsistencyIssues || hasIssues ? 'crimson' : 'emerald'}>
+        {hasConsistencyIssues || hasIssues ? 'Нужна проверка' : 'Всё сходится'}
+      </Chip>}
     >
       <div className="space-y-4 text-sm">
+        {/* Self-check of the aggregation */}
         <div>
-          <p className="stat-label mb-2">
-            Исключено из статистики — {stats.rejectedRows.length}
-          </p>
+          <p className="stat-label mb-2">Сверка агрегации</p>
           <ul className="space-y-1.5">
-            {stats.rejectedRows.map((row) => (
-              <li
-                key={row.rowNumber}
-                className="flex flex-wrap items-center gap-2 rounded-lg border border-crimson-600/30 bg-crimson-600/8 px-3 py-2"
-              >
-                <span className="chip border border-ink-600 bg-ink-800 text-parch-400">
-                  строка {row.rowNumber}
+            <li className="flex flex-wrap items-center gap-2 rounded-lg border border-ink-700 bg-ink-900 px-3 py-2 text-xs">
+              {consistency.heroTotalsOk ? (
+                <Chip tone="emerald">суммы сходятся</Chip>
+              ) : (
+                <Chip tone="crimson">расхождение</Chip>
+              )}
+              <span className="text-parch-300">
+                Всего героев = их игры в 1 vs 1 + игры в 2 vs 2
+                {consistency.heroTotalsOk
+                  ? ' — проверено для каждого героя.'
+                  : ` — нарушений: ${consistency.heroTotalViolations.length}.`}
+              </span>
+            </li>
+
+            {consistency.crossCheck.available ? (
+              <>
+                <li className="flex flex-wrap items-center gap-2 rounded-lg border border-ink-700 bg-ink-900 px-3 py-2 text-xs">
+                  {heroMismatches.length === 0 ? (
+                    <Chip tone="emerald">герои совпадают</Chip>
+                  ) : (
+                    <Chip tone="crimson">расхождение</Chip>
+                  )}
+                  <span className="text-parch-300">
+                    Сверка со сводными листами «Матчи 1 на 1» и «Матчи 2 на 2»:{' '}
+                    {consistency.crossCheck.heroes.sheet} и {consistency.crossCheck.heroes.app}{' '}
+                    вхождений героев
+                    {heroMismatches.length > 0
+                      ? ` — расхождений: ${heroMismatches.length}.`
+                      : ' — расхождений нет.'}
+                  </span>
+                </li>
+                <li className="flex flex-wrap items-center gap-2 rounded-lg border border-ink-700 bg-ink-900 px-3 py-2 text-xs">
+                  {playerMismatches.length === 0 ? (
+                    <Chip tone="emerald">игроки совпадают</Chip>
+                  ) : (
+                    <Chip tone="crimson">расхождение</Chip>
+                  )}
+                  <span className="text-parch-300">
+                    Сверка игроков со сводными листами:{' '}
+                    {consistency.crossCheck.players.sheet} и{' '}
+                    {consistency.crossCheck.players.app} игровых мест
+                    {playerMismatches.length > 0
+                      ? ` — расхождений: ${playerMismatches.length}.`
+                      : ' — расхождений нет.'}
+                  </span>
+                </li>
+                {[...heroMismatches, ...playerMismatches].slice(0, 20).map((mismatch) => (
+                  <li
+                    key={`${mismatch.name}-${mismatch.sheet}`}
+                    className="flex flex-wrap items-center gap-2 rounded-lg border border-crimson-600/30 bg-crimson-600/8 px-3 py-2 text-xs"
+                  >
+                    <span className="font-medium text-parch-100">{mismatch.name}</span>
+                    <span className="text-parch-400">
+                      в таблице: {mismatch.sheet} · в приложении: {mismatch.app}
+                    </span>
+                  </li>
+                ))}
+              </>
+            ) : (
+              <li className="flex flex-wrap items-center gap-2 rounded-lg border border-ink-700 bg-ink-900 px-3 py-2 text-xs">
+                <Chip tone="neutral">сверка недоступна</Chip>
+                <span className="text-parch-400">
+                  Сводные листы «Матчи 1 на 1» и «Матчи 2 на 2» недоступны в этом режиме
+                  чтения.
                 </span>
-                <span className="text-xs text-parch-300">{row.reason}</span>
               </li>
-            ))}
+            )}
           </ul>
         </div>
+
+        {hasIssues ? (
+          <div>
+            <p className="stat-label mb-2">
+              Исключено из статистики — {stats.rejectedRows.length}
+            </p>
+            <ul className="space-y-1.5">
+              {stats.rejectedRows.map((row) => (
+                <li
+                  key={row.rowNumber}
+                  className="flex flex-wrap items-center gap-2 rounded-lg border border-crimson-600/30 bg-crimson-600/8 px-3 py-2"
+                >
+                  <span className="chip border border-ink-600 bg-ink-800 text-parch-400">
+                    строка {row.rowNumber}
+                  </span>
+                  <span className="text-xs text-parch-300">{row.reason}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </Panel>
   );
@@ -886,9 +1055,29 @@ function RecentMatches({ data }: { data: AppData }) {
             <span className="text-parch-600">{formatDate(match.timestamp)}</span>
           </div>
           <p className="mt-1.5 text-parch-300">
-            {match.mode === '1v1'
-              ? `${match.players[0]} (${match.heroes[0]})  против  ${match.players[1]} (${match.heroes[1]})`
-              : `${match.team1Players.join(' + ')}  против  ${match.team2Players.join(' + ')}`}
+            {match.mode === '1v1' ? (
+              <>
+                <PlayerLink name={match.players[0]} /> ({match.heroes[0]}){' '}
+                <span className="text-parch-600">против</span> <PlayerLink name={match.players[1]} /> (
+                {match.heroes[1]})
+              </>
+            ) : (
+              <>
+                {match.team1Players.map((player, index) => (
+                  <span key={`${player}-${index}`}>
+                    <PlayerLink name={player} />
+                    {index < match.team1Players.length - 1 ? ' + ' : ''}
+                  </span>
+                ))}{' '}
+                <span className="text-parch-600">против</span>{' '}
+                {match.team2Players.map((player, index) => (
+                  <span key={`${player}-${index}`}>
+                    <PlayerLink name={player} />
+                    {index < match.team2Players.length - 1 ? ' + ' : ''}
+                  </span>
+                ))}
+              </>
+            )}
           </p>
           <p className="mt-0.5 text-parch-600">
             📍 {match.map ?? UNSPECIFIED_MAP}

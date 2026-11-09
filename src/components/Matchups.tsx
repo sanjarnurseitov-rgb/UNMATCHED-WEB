@@ -13,6 +13,7 @@ import {
   formatPct,
 } from './ui';
 import { HeroAvatar } from './HeroModal';
+import { PlayerAvatar, PlayerLink } from './PlayerModal';
 import { MIN_GAMES_FOR_NEMESIS, MIN_GAMES_FOR_TIER } from '@/lib/stats';
 import type { AppData, HeroProfile, HeroTier, Matchup } from '@/lib/types';
 
@@ -420,43 +421,104 @@ function MatchupStats({ stats }: { stats: AppData['stats'] }) {
                 </tr>
               </thead>
               <tbody>
-                {nemesisRows.map((hero) => (
-                  <tr key={hero.name} className="border-b border-ink-800/70">
-                    <td className="py-2 pr-3">
-                      <div className="flex items-center gap-2.5">
-                        <HeroAvatar name={hero.name} image={hero.image} size={28} />
-                        <span className="text-parch-100">{hero.name}</span>
-                      </div>
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
-                      {hero.games1v1}
-                    </td>
-                    <td className="py-2 pr-3">
-                      {hero.worstEnemy ? <OpponentChip opponent={hero.worstEnemy} /> : '—'}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums">
-                      {hero.worstEnemy ? (
-                        <span className="font-semibold text-crimson-400">
-                          {formatPct(hero.worstEnemy.winRate)}
-                        </span>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                    <td className="py-2 pr-3">
-                      {hero.bestVictim ? <OpponentChip opponent={hero.bestVictim} /> : '—'}
-                    </td>
-                    <td className="py-2 pr-3 text-right tabular-nums">
-                      {hero.bestVictim ? (
-                        <span className="font-semibold text-emerald-400">
-                          {formatPct(hero.bestVictim.winRate)}
-                        </span>
-                      ) : (
-                        '—'
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {nemesisRows.map((hero) => {
+                  /*
+                   * Both columns come from the same pool of opponents the hero
+                   * met at least twice. When only one opponent qualifies, it
+                   * is shown once — in the column that matches its result —
+                   * so the same character never appears twice in a row.
+                   */
+                  const sameOpponent =
+                    hero.worstEnemy && hero.bestVictim
+                      ? hero.worstEnemy.name === hero.bestVictim.name
+                      : false;
+                  const onlyOpponent = sameOpponent ? hero.worstEnemy : null;
+                  const isVictim = onlyOpponent ? onlyOpponent.winRate >= 0.5 : false;
+
+                  return (
+                    <tr key={hero.name} className="border-b border-ink-800/70">
+                      <td className="py-2 pr-3">
+                        <div className="flex items-center gap-2.5">
+                          <HeroAvatar name={hero.name} image={hero.image} size={28} />
+                          <span className="text-parch-100">{hero.name}</span>
+                        </div>
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums text-parch-300">
+                        {hero.games1v1}
+                      </td>
+                      <td className="py-2 pr-3">
+                        {onlyOpponent ? (
+                          isVictim ? (
+                            <span
+                              className="text-xs text-parch-600"
+                              title="Единственный соперник, сыгранный не менее двух раз"
+                            >
+                              —
+                            </span>
+                          ) : (
+                            <OpponentChip opponent={onlyOpponent} />
+                          )
+                        ) : hero.worstEnemy ? (
+                          <OpponentChip opponent={hero.worstEnemy} />
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {onlyOpponent ? (
+                          isVictim ? (
+                            '—'
+                          ) : (
+                            <span className="font-semibold text-crimson-400">
+                              {formatPct(onlyOpponent.winRate)}
+                            </span>
+                          )
+                        ) : hero.worstEnemy ? (
+                          <span className="font-semibold text-crimson-400">
+                            {formatPct(hero.worstEnemy.winRate)}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="py-2 pr-3">
+                        {onlyOpponent ? (
+                          isVictim ? (
+                            <OpponentChip opponent={onlyOpponent} />
+                          ) : (
+                            <span
+                              className="text-xs text-parch-600"
+                              title="Единственный соперник, сыгранный не менее двух раз"
+                            >
+                              —
+                            </span>
+                          )
+                        ) : hero.bestVictim ? (
+                          <OpponentChip opponent={hero.bestVictim} />
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                      <td className="py-2 pr-3 text-right tabular-nums">
+                        {onlyOpponent ? (
+                          isVictim ? (
+                            <span className="font-semibold text-emerald-400">
+                              {formatPct(onlyOpponent.winRate)}
+                            </span>
+                          ) : (
+                            '—'
+                          )
+                        ) : hero.bestVictim ? (
+                          <span className="font-semibold text-emerald-400">
+                            {formatPct(hero.bestVictim.winRate)}
+                          </span>
+                        ) : (
+                          '—'
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -518,7 +580,21 @@ function TeamStats({ stats }: { stats: AppData['stats'] }) {
               <tbody>
                 {stats.playerSynergies.slice(0, 12).map((pair) => (
                   <tr key={pair.key} className="border-b border-ink-800/70">
-                    <td className="py-2 pr-3 text-parch-100">{pair.members.join(' + ')}</td>
+                    <td className="py-2 pr-3">
+                      <span className="flex items-center gap-2">
+                        {pair.members.map((member) => (
+                          <PlayerAvatar key={member} name={member} size={24} rounded="rounded-md" />
+                        ))}
+                        <span className="text-parch-100">
+                          {pair.members.map((member, index) => (
+                            <span key={member}>
+                              <PlayerLink name={member} />
+                              {index < pair.members.length - 1 ? ' + ' : ''}
+                            </span>
+                          ))}
+                        </span>
+                      </span>
+                    </td>
                     <td className="py-2 pr-3 text-right tabular-nums text-parch-300">{pair.games}</td>
                     <td className="py-2 pr-3 text-right tabular-nums text-emerald-400">
                       {pair.wins}

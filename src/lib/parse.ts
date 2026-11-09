@@ -221,3 +221,76 @@ export function parseMatchesSheet(rows: string[][]): {
 
   return { matches, rejected };
 }
+
+/* ---------------------------------------------------------------------------
+   Curated per-mode match sheets.
+
+   The sheet keeps two manually curated splits of the match history:
+
+     «Матчи 1 на 1»  Дата | Режим | Игрок 1 | Герой 1 | Игрок 2 | Герой 2 |
+                      Карта | Победитель | Комментарий
+     «Матчи 2 на 2»  Дата | Режим | Карта | Команда 1 Игрок 1 | Команда 1 Герой 1 |
+                      Команда 1 Игрок 2 | Команда 1 Герой 2 | Команда 2 Игрок 1 |
+                      Команда 2 Герой 1 | Команда 2 Игрок 2 | Команда 2 Герой 2 |
+                      Победитель
+
+   They are NOT a data source for the app — the form-responses tab is. They
+   are parsed here only so the engine can cross-check its own aggregation
+   against an independent copy of the history.
+--------------------------------------------------------------------------- */
+
+/** One appearance of a hero/player in a curated sheet. */
+export interface CuratedAppearance {
+  mode: GameMode;
+  /** Hero names in seat order. */
+  heroes: string[];
+  /** Player names in seat order. */
+  players: string[];
+}
+
+function curatedColumn(row: string[], index: number): string {
+  return (row[index] ?? '').trim();
+}
+
+/**
+ * Parse the curated 1 vs 1 sheet.
+ * Columns: 0 Дата, 1 Режим, 2 Игрок 1, 3 Герой 1, 4 Игрок 2, 5 Герой 2,
+ *          6 Карта, 7 Победитель, 8 Комментарий
+ */
+export function parseCurated1v1(rows: string[][]): CuratedAppearance[] {
+  const out: CuratedAppearance[] = [];
+  for (const row of rows.slice(1)) {
+    const heroes = [curatedColumn(row, 3), curatedColumn(row, 5)];
+    const players = [curatedColumn(row, 2), curatedColumn(row, 4)];
+    if (!heroes.every(Boolean) || !players.every(Boolean)) continue;
+    out.push({ mode: '1v1', heroes, players });
+  }
+  return out;
+}
+
+/**
+ * Parse the curated 2 vs 2 sheet.
+ * Columns: 0 Дата, 1 Режим, 2 Карта, 3 Т1 Игрок 1, 4 Т1 Герой 1,
+ *          5 Т1 Игрок 2, 6 Т1 Герой 2, 7 Т2 Игрок 1, 8 Т2 Герой 1,
+ *          9 Т2 Игрок 2, 10 Т2 Герой 2, 11 Победитель
+ */
+export function parseCurated2v2(rows: string[][]): CuratedAppearance[] {
+  const out: CuratedAppearance[] = [];
+  for (const row of rows.slice(1)) {
+    const heroes = [
+      curatedColumn(row, 4),
+      curatedColumn(row, 6),
+      curatedColumn(row, 8),
+      curatedColumn(row, 10),
+    ];
+    const players = [
+      curatedColumn(row, 3),
+      curatedColumn(row, 5),
+      curatedColumn(row, 7),
+      curatedColumn(row, 9),
+    ];
+    if (!heroes.every(Boolean) || !players.every(Boolean)) continue;
+    out.push({ mode: '2v2', heroes, players });
+  }
+  return out;
+}

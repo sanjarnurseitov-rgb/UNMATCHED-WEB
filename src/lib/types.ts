@@ -271,7 +271,7 @@ export interface DashboardStats {
   /** Hero with the highest number of games played. */
   mostPlayedHero: DetailedRecord | null;
   /** Map used in the most matches (never an unknown/unnamed battlefield). */
-  mostPopularMap: { name: string; games: number; winRate: number } | null;
+  mostPopularMap: { name: string; games: number; winRate: number; image?: string | null } | null;
   /** Per-map statistics, sorted by number of matches. */
   maps: MapStats[];
   /** Highest win-rate hero duo in 2v2. */
@@ -308,6 +308,34 @@ export interface DashboardStats {
   rejectedRows: Array<{ rowNumber: number; reason: string }>;
   /** Hero catalogue split into official and homebrew characters. */
   heroBreakdown: HeroBreakdown;
+  /** Self-check of the aggregation — see `ConsistencyReport`. */
+  consistency: ConsistencyReport;
+}
+
+/**
+ * Self-check report.
+ *
+ * The engine verifies its own aggregation instead of trusting it: every hero
+ * total must equal 1 vs 1 appearances + 2 vs 2 appearances, and the counts
+ * are cross-checked against the sheet's curated per-mode match sheets.
+ */
+export interface ConsistencyReport {
+  /** True when every hero total equals games1v1 + games2v2. */
+  heroTotalsOk: boolean;
+  /** Heroes that violate the invariant (empty when everything is fine). */
+  heroTotalViolations: Array<{
+    name: string;
+    games: number;
+    games1v1: number;
+    games2v2: number;
+  }>;
+  /** Cross-check against the curated «Матчи 1 на 1» / «Матчи 2 на 2» sheets. */
+  crossCheck: {
+    /** False when the curated sheets could not be read (check skipped). */
+    available: boolean;
+    heroes: { sheet: number; app: number; mismatches: Array<{ name: string; sheet: number; app: number }> };
+    players: { sheet: number; app: number; mismatches: Array<{ name: string; sheet: number; app: number }> };
+  };
 }
 
 /** Everything the client needs to render the app. */

@@ -19,6 +19,7 @@ import {
   mapKey,
   pickDisplayName,
 } from './normalize';
+import type { CuratedAppearance } from './parse';
 import type {
   AppData,
   DashboardStats,
@@ -60,6 +61,12 @@ export interface StatsOptions {
   excludeHeroes?: (heroName: string) => boolean;
   /** Rows that could not be parsed — passed straight through to the result. */
   rejectedRows?: Array<{ rowNumber: number; reason: string }>;
+  /**
+   * The sheet's curated per-mode match sheets. Used only to cross-check the
+   * aggregation against an independent copy of the history — never as a data
+   * source.
+   */
+  curated?: { oneVsOne: CuratedAppearance[]; twoVsTwo: CuratedAppearance[] };
 }
 
 /** Lookup maps for the artwork stored in the IMAGES tab. */
@@ -742,6 +749,7 @@ export function computeStats(
         name: mostPopularMapEntry.name,
         games: mostPopularMapEntry.matches,
         winRate: mostPopularMapEntry.winRate,
+        image: mostPopularMapEntry.image ?? null,
       }
     : null;
 
@@ -762,16 +770,50 @@ export function computeStats(
   const heroProfiles: HeroProfile[] = heroes.map((hero) => {
     const key = identityKey(hero.name);
     const opponents = opponentStats.get(key) ?? [];
-    const rated = opponents.filter((o) => o.games >= MIN_GAMES_FOR_NEMESIS);
-    // When no opponent has a big enough sample, fall back to the most played
-    // matchup — one game is still information, it just must be labelled.
-    const maxGames = opponents.reduce((max, o) => Math.max(max, o.games), 0);
-    const pool =
-      rated.length > 0 ? rated : opponents.filter((o) => o.games === maxGames && o.games > 0);
-    const bestVictim =
-      [...pool].sort((a, b) => b.winRate - a.winRate || b.games - a.games)[0] ?? null;
-    const worstEnemy =
-      [...pool].sort((a, b) => a.winRate - b.winRate || b.games - a.games)[0] ?? null;
+    /*
+     * Nemesis / best victim.
+     *
+     * Only opponents with at least MIN_GAMES_FOR_NEMESIS meetings qualify —
+     * a single game would otherwise produce a meaningless 100 % / 0 % pair.
+     *
+     *   nemesis      — the opponent this hero loses to most often
+     *                  (the LOWEST win rate for this hero)
+     *   best victim  — the opponent this hero beats most often
+     *                  (the HIGHEST win rate for this hero)
+     *
+     * Both are picked from the same qualified pool, and the two are always
+     * different opponents whenever the pool holds more than one entry.
+     */
+    const qualified = opponents.filter((o) => o.games >= MIN_GAMES_FOR_NEMESIS);
+    /*
+     * Both are picked from the same pool, and they are always *different*
+     * opponents whenever the pool holds more than one entry:
+     *
+     *   nemesis      — the opponent this hero loses to most often
+     *                  (the LOWEST win rate for this hero)
+     *   best victim  — the opponent this hero beats most often
+     *                  (the HIGHEST win rate for this hero)
+     *
+     * Ties in win rate are broken by the larger sample. When even that leaves
+     * both slots pointing at the same character, the next best opponent takes
+     * the second slot — a duplicated name would be meaningless.
+     */
+    const byLowest = [...qualified].sort(
+      (a, b) => a.winRate - b.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
+    );
+    const byHighest = [...qualified].sort(
+      (a, b) => b.winRate - a.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
+    );
+    const worstEnemy = byLowest[0] ?? null;
+    let bestVictim = byHighest[0] ?? null;
+    if (
+      worstEnemy &&
+      bestVictim &&
+      worstEnemy.name === bestVictim.name &&
+      byHighest.length > 1
+    ) {
+      bestVictim = byHighest[1];
+    }
     const syn = synergiesByHero.get(key) ?? [];
     const bestSynergy = syn.length > 0 ? syn[0] : null;
     const worstSynergy = syn.length > 0 ? syn[syn.length - 1] : null;
@@ -803,8 +845,14 @@ export function computeStats(
         : null,
       bestSynergy,
       worstSynergy,
-      nemesis: [...opponents].sort((a, b) => a.winRate - b.winRate || b.games - a.games),
-      victims: [...opponents].sort((a, b) => b.winRate - a.winRate || b.games - a.games),
+      // Worst opponents first (this hero struggles against them) and best
+      // first (this hero beats them).
+      nemesis: [...opponents].sort(
+        (a, b) => a.winRate - b.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
+      ),
+      victims: [...opponents].sort(
+        (a, b) => b.winRate - a.winRate || b.games - a.games || a.name.localeCompare(b.name, 'ru'),
+      ),
     };
   });
 
@@ -836,6 +884,26 @@ export function computeStats(
       firstTurnWinRate: agg.matches > 0 ? agg.first / agg.matches : 0,
     };
   });
+
+  /* ------------------------------------------------------------------
+   * Self-check.
+   *
+   * The aggregation is verified instead of trusted:
+   *   1. every hero total must equal games1v1 + games2v2;
+   *   2. hero and player counts are compared against the sheet's curated
+   *      per-mode match sheets, an independent copy of the history.
+   * Any divergence is reported in the data-quality panel.
+   * ------------------------------------------------------------------ */
+  const heroTotalViolations = heroes
+    .filter((hero) => hero.games !== hero.games1v1 + hero.games2v2)
+    .map((hero) => ({
+      name: hero.name,
+      games: hero.games,
+      games1v1: hero.games1v1,
+      games2v2: hero.games2v2,
+    }));
+
+  const crossCheck = buildCrossCheck(options.curated, heroes, players);
 
   const sortedTimestamps = timestamps.sort();
 
@@ -887,7 +955,105 @@ export function computeStats(
       .sort((a, b) => b.games - a.games)
       .slice(0, 12),
     heroBreakdown,
+    consistency: {
+      heroTotalsOk: heroTotalViolations.length === 0,
+      heroTotalViolations,
+      crossCheck,
+    },
     rejectedRows: options.rejectedRows ?? [],
+  };
+}
+
+/**
+ * Compare the computed hero/player counts against the sheet's curated
+ * per-mode match sheets.
+ *
+ * The curated sheets are a manual split of the same history, so any hero or
+ * player whose count differs means one of the two copies is incomplete — a row
+ * that never reached the form responses, or a row that was added to the
+ * curated sheet only.
+ */
+function buildCrossCheck(
+  curated: { oneVsOne: CuratedAppearance[]; twoVsTwo: CuratedAppearance[] } | undefined,
+  heroes: DetailedRecord[],
+  players: DetailedRecord[],
+): DashboardStats['consistency']['crossCheck'] {
+  const empty = {
+    available: false,
+    heroes: {
+      sheet: 0,
+      app: 0,
+      mismatches: [] as Array<{ name: string; sheet: number; app: number }>,
+    },
+    players: {
+      sheet: 0,
+      app: 0,
+      mismatches: [] as Array<{ name: string; sheet: number; app: number }>,
+    },
+  };
+  if (!curated) return empty;
+
+  const rows = [...curated.oneVsOne, ...curated.twoVsTwo];
+  if (rows.length === 0) return empty;
+
+  // Heroes: one game per seat, skipping placeholders and the denylisted name.
+  const sheetHeroes = new Map<string, { display: string; count: number }>();
+  for (const row of rows) {
+    for (const hero of row.heroes) {
+      if (!hero || isPlaceholder(hero) || isExcludedHero(hero)) continue;
+      const key = identityKey(hero);
+      const entry = sheetHeroes.get(key) ?? { display: hero, count: 0 };
+      entry.count += 1;
+      sheetHeroes.set(key, entry);
+    }
+  }
+
+  // Players: one game per distinct player in the row — a dual-control player
+  // occupies two seats but that is a single game, same rule as the engine.
+  const sheetPlayers = new Map<string, { display: string; count: number }>();
+  for (const row of rows) {
+    const seen = new Set<string>();
+    for (const player of row.players) {
+      if (!player || isPlaceholder(player)) continue;
+      const key = identityKey(player);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const entry = sheetPlayers.get(key) ?? { display: player, count: 0 };
+      entry.count += 1;
+      sheetPlayers.set(key, entry);
+    }
+  }
+
+  const compare = (
+    sheet: Map<string, { display: string; count: number }>,
+    app: DetailedRecord[],
+  ) => {
+    const appByKey = new Map(app.map((r) => [identityKey(r.name), r]));
+    const mismatches: Array<{ name: string; sheet: number; app: number }> = [];
+    const names = new Set([...sheet.keys(), ...appByKey.keys()]);
+    for (const key of names) {
+      const sheetCount = sheet.get(key)?.count ?? 0;
+      const appCount = appByKey.get(key)?.games ?? 0;
+      if (sheetCount !== appCount) {
+        mismatches.push({
+          name: sheet.get(key)?.display ?? appByKey.get(key)?.name ?? key,
+          sheet: sheetCount,
+          app: appCount,
+        });
+      }
+    }
+    mismatches.sort((a, b) => b.sheet - a.sheet || a.name.localeCompare(b.name, 'ru'));
+    return {
+      sheet: [...sheet.values()].reduce((sum, e) => sum + e.count, 0),
+      app: app.reduce((sum, r) => sum + r.games, 0),
+      mismatches,
+    };
+  };
+
+  return {
+    available: true,
+    heroes: compare(sheetHeroes, heroes),
+    players: compare(sheetPlayers, players),
   };
 }
 
@@ -1031,8 +1197,9 @@ export function buildAppData(
   images: ImageIndex,
   meta: AppData['meta'],
   rejected: Array<{ rowNumber: number; reason: string }>,
+  curated?: { oneVsOne: CuratedAppearance[]; twoVsTwo: CuratedAppearance[] },
 ): AppData {
   const reference = buildReference(listRows, matches, images);
-  const stats = computeStats(matches, reference, { rejectedRows: rejected });
+  const stats = computeStats(matches, reference, { rejectedRows: rejected, curated });
   return { matches, reference, stats, meta };
 }

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Avatar, Chip, WinRateBar, formatPct } from './ui';
 import { HeroAvatar } from './HeroModal';
+import { PlayerAvatar, PlayerLink } from './PlayerModal';
 import type { DetailedRecord } from '@/lib/types';
 
 /**
@@ -182,9 +183,16 @@ function SplitTable({
                 {kind === 'hero' ? (
                   <HeroAvatar name={record.name} image={record.image} size={30} />
                 ) : (
-                  <Avatar name={record.name} image={record.image} size={30} />
+                  <PlayerAvatar name={record.name} image={record.image} size={30} />
                 )}
-                <span className="font-medium text-parch-100">{record.name}</span>
+                {kind === 'hero' ? (
+                  <span className="font-medium text-parch-100">{record.name}</span>
+                ) : (
+                  <PlayerLink
+                    name={record.name}
+                    className="font-medium text-parch-100"
+                  />
+                )}
               </div>
             </td>
             <td className={numCell(record.games1v1)}>{record.games1v1 || '—'}</td>
@@ -262,9 +270,16 @@ function CombinedTable({
                 {kind === 'hero' ? (
                   <HeroAvatar name={record.name} image={record.image} size={30} />
                 ) : (
-                  <Avatar name={record.name} image={record.image} size={30} />
+                  <PlayerAvatar name={record.name} image={record.image} size={30} />
                 )}
-                <span className="font-medium text-parch-100">{record.name}</span>
+                {kind === 'hero' ? (
+                  <span className="font-medium text-parch-100">{record.name}</span>
+                ) : (
+                  <PlayerLink
+                    name={record.name}
+                    className="font-medium text-parch-100"
+                  />
+                )}
                 {record.dualGames > 0 ? (
                   <Chip tone="violet" title="Матчи, где игрок вёл сразу двух героев">
                     2 героя

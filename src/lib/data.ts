@@ -6,12 +6,13 @@
  *
  * The app is read-only: nothing here ever writes back to the spreadsheet.
  */
-import { parseMatchesSheet } from './parse';
+import { parseCurated1v1, parseCurated2v2, parseMatchesSheet } from './parse';
 import { buildAppData, type ImageIndex } from './stats';
 import { identityKey, mapKey } from './normalize';
 import {
   getProvider,
   publicProvider,
+  readCuratedMatchesCached,
   readImagesCached,
   readListsCached,
   readMatchesCached,
@@ -156,12 +157,14 @@ export async function loadAppData(): Promise<AppData> {
   let matchRows: string[][];
   let listRows: string[][];
   let imageRows: string[][] = [];
+  let curatedRows: { oneVsOne: string[][]; twoVsTwo: string[][] } = { oneVsOne: [], twoVsTwo: [] };
 
   try {
-    [matchRows, listRows, imageRows] = await Promise.all([
+    [matchRows, listRows, imageRows, curatedRows] = await Promise.all([
       readMatchesCached(),
       readListsCached(),
       readImagesCached(),
+      readCuratedMatchesCached(),
     ]);
   } catch (error) {
     if (provider.kind !== 'api') throw error;
@@ -170,15 +173,23 @@ export async function loadAppData(): Promise<AppData> {
     // Fall back to the credential-free public CSV export so the dashboard
     // still renders instead of showing an error page.
     provider = publicProvider;
-    [matchRows, listRows, imageRows] = await Promise.all([
+    [matchRows, listRows, imageRows, curatedRows] = await Promise.all([
       publicProvider.readMatches(),
       publicProvider.readLists(),
       publicProvider.readImages(),
+      publicProvider.readCuratedMatches(),
     ]);
   }
 
   const { matches, rejected } = parseMatchesSheet(matchRows);
   const images = indexImages(imageRows);
+
+  // The curated per-mode sheets are an independent copy of the same history.
+  // They are parsed only to cross-check the aggregation — never used as rows.
+  const curated = {
+    oneVsOne: parseCurated1v1(curatedRows.oneVsOne),
+    twoVsTwo: parseCurated2v2(curatedRows.twoVsTwo),
+  };
 
   return buildAppData(
     matches,
@@ -191,6 +202,7 @@ export async function loadAppData(): Promise<AppData> {
       imageRows: imageRows.length,
     },
     rejected,
+    curated,
   );
 }
 

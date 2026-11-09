@@ -1,4 +1,4 @@
-import { HeroModalProvider } from '@/components/HeroModal';
+import { AppProviders } from '@/components/AppProviders';
 import { HistoryTable } from '@/components/HistoryTable';
 import { loadAppData } from '@/lib/data';
 
@@ -7,7 +7,7 @@ export const dynamic = 'force-dynamic';
 export default async function HistoryPage() {
   const data = await loadAppData();
   return (
-    <HeroModalProvider data={data}>
+    <AppProviders data={data}>
       <div className="space-y-6">
         <div>
           <h1 className="font-[family-name:var(--font-display)] text-2xl font-bold tracking-wide text-parch-100 sm:text-3xl">
@@ -19,6 +19,6 @@ export default async function HistoryPage() {
         </div>
         <HistoryTable data={data} />
       </div>
-    </HeroModalProvider>
+    </AppProviders>
   );
 }

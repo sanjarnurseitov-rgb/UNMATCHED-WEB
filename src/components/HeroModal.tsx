@@ -145,12 +145,14 @@ const TIER_STYLE: Record<HeroTier, { label: string; tone: 'gold' | 'emerald' | '
 
 function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => void }) {
   const tier = TIER_STYLE[profile.tier];
+  const worstEnemy = profile.worstEnemy;
+  const bestVictim = profile.bestVictim;
 
   return (
     <>
       <div className="modal-overlay bg-black/70 backdrop-blur-sm" onClick={onClose} />
       <div
-        className="modal-panel panel animate-fade-up"
+        className="modal-panel panel modal-animated"
         role="dialog"
         aria-modal="true"
         aria-label={`${profile.name} — профиль героя`}
@@ -215,21 +217,66 @@ function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => 
             </div>
           </div>
 
-          {/* Nemesis & victim */}
-          <div className="grid gap-3 sm:grid-cols-2">
-            <OpponentCard
-              title="Худший враг"
-              hint="Кто обыгрывает этого героя чаще всего"
-              opponent={profile.worstEnemy}
-              empty="Нет соперников с достаточной выборкой"
-            />
-            <OpponentCard
-              title="Лучшая жертва"
-              hint="Кого этот герой обыгрывает чаще всего"
-              opponent={profile.bestVictim}
-              empty="Нет соперников с достаточной выборкой"
-            />
-          </div>
+          {/*
+            Nemesis & victim.
+
+            Both are picked from the opponents the hero has met at least
+            twice. When only one opponent qualifies, that character is both
+            the worst and the best matchup — instead of showing the same name
+            twice, a single card explains the situation.
+          */}
+          {worstEnemy && bestVictim && worstEnemy.name === bestVictim.name ? (
+            <div className="rounded-lg border border-ink-700 bg-ink-900 p-3">
+              <p
+                className="stat-label"
+                title="У героя всего один соперник, сыгранный не менее двух раз"
+              >
+                Единственный соперник с достаточной выборкой
+              </p>
+              <div className="mt-2 flex items-center gap-3">
+                <Avatar
+                  name={worstEnemy.name}
+                  image={worstEnemy.image}
+                  size={32}
+                  rounded="rounded-md"
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-parch-100">
+                    {worstEnemy.name}
+                  </p>
+                  <p className="text-xs text-parch-500">
+                    {worstEnemy.games} матчей · {worstEnemy.wins} побед
+                  </p>
+                </div>
+                <span
+                  className={`text-sm font-bold tabular-nums ${
+                    worstEnemy.winRate >= 0.5 ? 'text-emerald-400' : 'text-crimson-400'
+                  }`}
+                >
+                  {formatPct(worstEnemy.winRate)}
+                </span>
+              </div>
+              <p className="mt-2 text-xs text-parch-500">
+                Отдельных «худшего врага» и «лучшей жертвы» нет: соперник только один, и он
+                набирает минимум два матча.
+              </p>
+            </div>
+          ) : (
+            <div className="grid gap-3 sm:grid-cols-2">
+              <OpponentCard
+                title="Худший враг"
+                hint="Кто обыгрывает этого героя чаще всего"
+                opponent={worstEnemy}
+                empty="Нет соперников с достаточной выборкой"
+              />
+              <OpponentCard
+                title="Лучшая жертва"
+                hint="Кого этот герой обыгрывает чаще всего"
+                opponent={bestVictim}
+                empty="Нет соперников с достаточной выборкой"
+              />
+            </div>
+          )}
 
           {/* Favourite map & best synergy */}
           <div className="grid gap-3 sm:grid-cols-2">

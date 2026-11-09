@@ -31,6 +31,14 @@ export const DEFAULT_IMAGES_TAB = 'IMAGES';
 /** Tab titles in the live sheet. */
 export const MATCHES_TAB_TITLE = 'Ответы на форму (3)';
 export const LISTS_TAB_TITLE = 'PlayerList';
+/**
+ * Curated per-mode match lists. They are a manual split of the form responses
+ * into a 1 vs 1 sheet and a 2 vs 2 sheet. The app does NOT use them as a data
+ * source — it uses them as an independent cross-check, so a divergence
+ * between the two is visible instead of silent.
+ */
+export const MATCHES_1V1_TAB_TITLE = 'Матчи 1 на 1';
+export const MATCHES_2V2_TAB_TITLE = 'Матчи 2 на 2';
 
 export type SourceKind = 'api' | 'public' | 'snapshot';
 
@@ -39,6 +47,11 @@ export interface Provider {
   readMatches(): Promise<string[][]>;
   readLists(): Promise<string[][]>;
   readImages(): Promise<string[][]>;
+  /**
+   * Curated per-mode match sheets used for cross-checking. Returns an empty
+   * array when the tab is unavailable — the check is optional, never fatal.
+   */
+  readCuratedMatches(): Promise<{ oneVsOne: string[][]; twoVsTwo: string[][] }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -138,10 +151,10 @@ async function fetchPublicCsv(gid: string): Promise<string[][]> {
  * gid, and the gid of the IMAGES tab is not known to the app. gviz accepts a
  * tab name, which is exactly what is needed here.
  */
-async function fetchPublicCsvByTabName(tab: string): Promise<string[][]> {
+async function fetchPublicCsvByTabName(tab: string, range?: string): Promise<string[][]> {
   const url = `https://docs.google.com/spreadsheets/d/${spreadsheetId()}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(
     tab,
-  )}`;
+  )}${range ? `&range=${encodeURIComponent(range)}` : ''}`;
   const res = await fetch(url, { cache: 'no-store' });
   if (!res.ok) {
     throw new Error(`Google Sheets CSV export for tab "${tab}" failed (HTTP ${res.status}).`);
@@ -162,10 +175,26 @@ export const publicProvider: Provider = {
     try {
       const gid = imagesGid();
       if (gid) return await fetchPublicCsv(gid);
-      return await fetchPublicCsvByTabName(imagesTab());
+      // An explicit wide range guarantees that every column of every block is
+      // returned — the sheet holds several "Имя | Тип | URL" blocks side by
+      // side, and a trailing block would otherwise be trimmed away.
+      return await fetchPublicCsvByTabName(imagesTab(), 'A1:Z400');
     } catch {
       // A missing IMAGES tab must never break the dashboard.
       return [];
+    }
+  },
+
+  async readCuratedMatches() {
+    const empty = { oneVsOne: [] as string[][], twoVsTwo: [] as string[][] };
+    try {
+      const [oneVsOne, twoVsTwo] = await Promise.all([
+        fetchPublicCsvByTabName(MATCHES_1V1_TAB_TITLE, 'A1:Z1200'),
+        fetchPublicCsvByTabName(MATCHES_2V2_TAB_TITLE, 'A1:Z1200'),
+      ]);
+      return { oneVsOne, twoVsTwo };
+    } catch {
+      return empty;
     }
   },
 };
@@ -195,9 +224,22 @@ export const apiProvider: Provider = {
 
   async readImages() {
     try {
-      return await readRange(`'${imagesTab()}'!A1:Z`);
+      return await readRange(`'${imagesTab()}'!A1:Z400`);
     } catch {
       return [];
+    }
+  },
+
+  async readCuratedMatches() {
+    const empty = { oneVsOne: [] as string[][], twoVsTwo: [] as string[][] };
+    try {
+      const [oneVsOne, twoVsTwo] = await Promise.all([
+        readRange(`'${MATCHES_1V1_TAB_TITLE}'!A1:Z1200`),
+        readRange(`'${MATCHES_2V2_TAB_TITLE}'!A1:Z1200`),
+      ]);
+      return { oneVsOne, twoVsTwo };
+    } catch {
+      return empty;
     }
   },
 };
@@ -210,6 +252,8 @@ interface Snapshot {
   matches: string[][];
   lists: string[][];
   images?: string[][];
+  /** Curated per-mode sheets, used for the aggregation cross-check. */
+  curated?: { oneVsOne: string[][]; twoVsTwo: string[][] };
 }
 
 async function loadSnapshot(): Promise<Snapshot> {
@@ -227,6 +271,9 @@ export const snapshotProvider: Provider = {
   },
   async readImages() {
     return (await loadSnapshot()).images ?? [];
+  },
+  async readCuratedMatches() {
+    return (await loadSnapshot()).curated ?? { oneVsOne: [], twoVsTwo: [] };
   },
 };
 
@@ -271,4 +318,15 @@ export function readListsCached(): Promise<string[][]> {
 
 export function readImagesCached(): Promise<string[][]> {
   return cached('images', () => getProvider().readImages());
+}
+
+/**
+ * Curated per-mode match sheets. Cached like the other reads, and optional:
+ * an unavailable tab simply yields empty arrays.
+ */
+export function readCuratedMatchesCached(): Promise<{
+  oneVsOne: string[][];
+  twoVsTwo: string[][];
+}> {
+  return cached('curated', () => getProvider().readCuratedMatches());
 }
