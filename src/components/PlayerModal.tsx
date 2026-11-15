@@ -10,7 +10,9 @@
  *
  * Layout of the modal, in this order:
  *   1. headline statistics + win-rate bar + 1 vs 1 / 2 vs 2 split
- *   2. "Последние матчей" — the most recent matches, newest first
+ *   2. "Последние матчей" — the most recent matches, newest first. Every
+ *      match is split into "own side" and "opponents", so the teammate of a
+ *      2 vs 2 game is never mixed up with the two opponents.
  *   3. "Любимые герои" and "Любимые поля"
  */
 import { createContext, useContext, useEffect, useMemo, useState } from 'react';
@@ -213,17 +215,46 @@ export function PlayerLink({
    Recent matches
 --------------------------------------------------------------------------- */
 
-interface RecentMatch {
+/**
+ * One participant of a match together with the hero(s) they controlled.
+ *
+ * A participant can appear more than once in a 2 vs 2 match: with dual
+ * control the same player occupies both seats of a team, so one entry carries
+ * both heroes.
+ */
+export interface LineupEntry {
+  /** Display name of the player. */
+  name: string;
+  /** Heroes controlled by that player. One entry for normal matches. */
+  heroes: string[];
+  /** True when the player controlled two heroes (dual control). */
+  dual: boolean;
+}
+
+export interface RecentMatch {
   match: Match;
   result: 'win' | 'loss' | 'draw';
-  /** Hero(s) controlled by this player. */
-  heroes: string[];
-  /** Display names of the opponents. */
-  opponents: string[];
+  /** Game mode of the match. */
+  mode: '1v1' | '2v2';
+  /** Hero(s) controlled by the player themselves. Two in a dual-control match. */
+  ownHeroes: string[];
+  /** True when the player controlled both heroes of their team. */
+  ownDual: boolean;
+  /**
+   * The teammate in a 2 vs 2 match. Null in 1 vs 1 and in dual-control
+   * matches, where the player fills both seats of the team.
+   */
+  teammate: LineupEntry | null;
+  /** Opponents — one entry per opponent player, never the teammate. */
+  opponents: LineupEntry[];
 }
 
 /**
  * The most recent matches of a player, newest first.
+ *
+ * The line-up is resolved per match, so a 2 vs 2 game shows the teammate
+ * separately from the two opponents instead of listing all three other
+ * players side by side.
  *
  * Computed on the client from the raw match list, so no extra data has to be
  * shipped to the browser.
@@ -239,26 +270,68 @@ export function recentMatchesFor(
   for (const match of matches) {
     if (!match.valid) continue;
 
-    const seats = match.players
-      .map((player, seat) => ({ player, seat }))
-      .filter((entry) => entry.player && !isPlaceholder(entry.player))
-      .filter((entry) => identityKey(entry.player) === key)
-      .map((entry) => entry.seat);
-    if (seats.length === 0) continue;
+    const ownSeats: number[] = [];
+    match.players.forEach((player, seat) => {
+      if (!player || isPlaceholder(player)) return;
+      if (identityKey(player) === key) ownSeats.push(seat);
+    });
+    if (ownSeats.length === 0) continue;
 
     const result = resultForPlayer(match, playerName);
     if (!result) continue;
 
-    const ownSeats = new Set(seats);
-    const heroes = seats.map((seat) => match.heroes[seat] ?? '');
-    const opponents: string[] = [];
-    match.players.forEach((player, seat) => {
-      if (ownSeats.has(seat)) return;
-      if (!player || isPlaceholder(player)) return;
-      if (!opponents.includes(player)) opponents.push(player);
-    });
+    const mode: '1v1' | '2v2' = match.mode === '2v2' ? '2v2' : '1v1';
+    const heroAt = (seat: number) => (match.heroes[seat] ?? '').trim();
 
-    out.push({ match, result, heroes, opponents });
+    /*
+     * Seat layout: 1 vs 1 — [player, opponent];
+     * 2 vs 2 — [t1p1, t1p2, t2p3, t2p4], so seats 0/1 are team 1 and
+     * seats 2/3 are team 2.
+     */
+    const ownTeamSeats = mode === '2v2' ? (ownSeats[0] < 2 ? [0, 1] : [2, 3]) : ownSeats;
+    const foeSeats =
+      mode === '2v2'
+        ? ownSeats[0] < 2
+          ? [2, 3]
+          : [0, 1]
+        : match.players.map((_, seat) => seat).filter((seat) => !ownSeats.includes(seat));
+
+    const ownHeroes = ownSeats.map(heroAt).filter(Boolean);
+
+    // The teammate is the other seat of the own team that the player did not take.
+    let teammate: LineupEntry | null = null;
+    for (const seat of ownTeamSeats) {
+      if (ownSeats.includes(seat)) continue;
+      const name = match.players[seat] ?? '';
+      if (!name || isPlaceholder(name)) continue;
+      const hero = heroAt(seat);
+      teammate = { name, heroes: hero ? [hero] : [], dual: false };
+    }
+
+    // Opponents — one entry per player, both heroes merged for dual control.
+    const opponents: LineupEntry[] = [];
+    for (const seat of foeSeats) {
+      const name = match.players[seat] ?? '';
+      if (!name || isPlaceholder(name)) continue;
+      const hero = heroAt(seat);
+      const existing = opponents.find((entry) => identityKey(entry.name) === identityKey(name));
+      if (existing) {
+        if (hero) existing.heroes.push(hero);
+        existing.dual = existing.heroes.length > 1;
+      } else {
+        opponents.push({ name, heroes: hero ? [hero] : [], dual: false });
+      }
+    }
+
+    out.push({
+      match,
+      result,
+      mode,
+      ownHeroes,
+      ownDual: ownHeroes.length > 1,
+      teammate,
+      opponents,
+    });
   }
 
   out.sort((a, b) => matchRecency(b.match) - matchRecency(a.match));
@@ -369,64 +442,7 @@ function PlayerModal({
             ) : (
               <ul className="mt-2 space-y-1.5">
                 {recent.map((item) => (
-                  <li
-                    key={item.match.id}
-                    className="flex items-center gap-2 rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-1.5"
-                  >
-                    <span
-                      className={`w-1.5 shrink-0 self-stretch rounded-full ${
-                        item.result === 'win'
-                          ? 'bg-emerald-500'
-                          : item.result === 'loss'
-                            ? 'bg-crimson-500'
-                            : 'bg-ink-500'
-                      }`}
-                      aria-hidden
-                    />
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs text-parch-200">
-                        {item.heroes.map((hero, index) => (
-                          <span key={`${hero}-${index}`}>
-                            <HeroAvatar
-                              name={hero}
-                              image={heroImages[hero] ?? null}
-                              size={18}
-                              rounded="rounded-md"
-                              className="mx-0.5 inline-flex align-middle"
-                            />
-                            {hero}
-                            {index < item.heroes.length - 1 ? ' + ' : ''}
-                          </span>
-                        ))}
-                      </p>
-                      <p className="truncate text-[11px] text-parch-500">
-                        vs{' '}
-                        {item.opponents.length === 0
-                          ? '—'
-                          : item.opponents.map((opponent, index) => (
-                              <span key={opponent}>
-                                <PlayerLink name={opponent} className="text-parch-500" />
-                                {index < item.opponents.length - 1 ? ', ' : ''}
-                              </span>
-                            ))}
-                        {item.match.map ? ` · ${item.match.map}` : ''}
-                      </p>
-                    </div>
-                    <div className="shrink-0 text-right">
-                      <span
-                        className={`text-xs font-bold uppercase ${
-                          item.result === 'win'
-                            ? 'text-emerald-400'
-                            : item.result === 'loss'
-                              ? 'text-crimson-400'
-                              : 'text-parch-400'
-                        }`}
-                      >
-                        {item.result === 'win' ? 'победа' : item.result === 'loss' ? 'поражение' : 'ничья'}
-                      </span>
-                      <p className="text-[11px] text-parch-500">{formatDate(item.match.timestamp)}</p>
-                    </div>
-                  </li>
+                  <RecentMatchRow key={item.match.id} item={item} heroImages={heroImages} />
                 ))}
               </ul>
             )}
@@ -490,6 +506,141 @@ function PlayerModal({
         </div>
       </div>
     </>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   One row of the "recent matches" list
+--------------------------------------------------------------------------- */
+
+/** Compact mode badge — `1v1` or `2v2`. */
+function ModeBadge({ mode }: { mode: '1v1' | '2v2' }) {
+  return (
+    <span
+      className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-bold tracking-wide ${
+        mode === '2v2'
+          ? 'border-violet-500/40 bg-violet-500/15 text-violet-300'
+          : 'border-azure-600/40 bg-azure-500/15 text-azure-400'
+      }`}
+      title={mode === '2v2' ? 'Два на двоих' : 'Один на одного'}
+    >
+      {mode}
+    </span>
+  );
+}
+
+/**
+ * A single match of the recent-matches list.
+ *
+ * The first line shows the player's own side — own hero(s) and, in 2 vs 2,
+ * the teammate. The second line shows the opponents with their heroes and the
+ * battlefield. Teammate and opponents never mix, so a 2 vs 2 game no longer
+ * looks like a 1 against 3.
+ */
+function RecentMatchRow({
+  item,
+  heroImages,
+}: {
+  item: RecentMatch;
+  heroImages: Record<string, string | null>;
+}) {
+  const bar =
+    item.result === 'win'
+      ? 'bg-emerald-500'
+      : item.result === 'loss'
+        ? 'bg-crimson-500'
+        : 'bg-ink-500';
+  const tone =
+    item.result === 'win'
+      ? 'text-emerald-400'
+      : item.result === 'loss'
+        ? 'text-crimson-400'
+        : 'text-parch-400';
+
+  return (
+    <li className="flex items-start gap-2.5 rounded-lg border border-ink-700 bg-ink-900 px-2.5 py-2">
+      <span className={`w-1.5 shrink-0 self-stretch rounded-full ${bar}`} aria-hidden />
+
+      <div className="min-w-0 flex-1 space-y-1">
+        {/* Line 1 — the player's own side. */}
+        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs">
+          <ModeBadge mode={item.mode} />
+          {item.ownHeroes.map((hero, index) => (
+            <span key={`${hero}-${index}`} className="inline-flex items-center gap-1">
+              <HeroAvatar
+                name={hero}
+                image={heroImages[hero] ?? null}
+                size={18}
+                rounded="rounded-md"
+                className="shrink-0"
+              />
+              <span className="font-semibold text-parch-100">{hero}</span>
+              {index < item.ownHeroes.length - 1 ? (
+                <span className="text-parch-500">+</span>
+              ) : null}
+            </span>
+          ))}
+          {item.ownDual ? (
+            <span
+              className="text-[10px] uppercase tracking-wide text-violet-300"
+              title="Игрок управлял двумя героями"
+            >
+              двойной контроль
+            </span>
+          ) : null}
+          {item.teammate ? (
+            <>
+              <span className="text-parch-500">+</span>
+              <PlayerLink name={item.teammate.name} className="text-parch-300" />
+              {item.teammate.heroes.length > 0 ? (
+                <span className="text-parch-400">({item.teammate.heroes.join(' + ')})</span>
+              ) : null}
+            </>
+          ) : null}
+        </p>
+
+        {/* Line 2 — the opposing side and the battlefield. */}
+        <p className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[11px] text-parch-500">
+          <span className="text-parch-600">vs</span>
+          {item.opponents.length === 0 ? (
+            <span>—</span>
+          ) : (
+            item.opponents.map((opponent, index) => (
+              <span key={opponent.name} className="inline-flex items-center gap-1">
+                <PlayerLink name={opponent.name} className="text-parch-300" />
+                {opponent.heroes.length > 0 ? (
+                  <span className="text-parch-500">({opponent.heroes.join(' + ')})</span>
+                ) : null}
+                {opponent.dual ? (
+                  <span
+                    className="text-[10px] uppercase tracking-wide text-violet-300"
+                    title="Соперник управлял двумя героями"
+                  >
+                    оба героя
+                  </span>
+                ) : null}
+                {index < item.opponents.length - 1 ? (
+                  <span className="text-parch-600">и</span>
+                ) : null}
+              </span>
+            ))
+          )}
+          {item.match.map ? (
+            <>
+              <span className="text-parch-600">·</span>
+              <span className="text-parch-400">{item.match.map}</span>
+            </>
+          ) : null}
+        </p>
+      </div>
+
+      <div className="shrink-0 text-right">
+        <span className={`text-xs font-bold uppercase ${tone}`}>
+          {item.result === 'win' ? 'победа' : item.result === 'loss' ? 'поражение' : 'ничья'}
+        </span>
+        <p className="text-[11px] text-parch-500">{formatDate(item.match.timestamp)}</p>
+      </div>
+    </li>
   );
 }
 

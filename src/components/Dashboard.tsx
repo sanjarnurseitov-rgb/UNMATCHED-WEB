@@ -278,22 +278,28 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
           ) : null}
         </StatCard>
 
+        {/*
+            The old subtitle repeated the two mode boxes word for word, so the
+            total moved into a small pill next to the hero's name.
+        */}
         <StatCard
           label="Самый частый герой"
-          value={stats.mostPlayedHero?.name ?? '—'}
-          sub={
-            stats.mostPlayedHero
-              ? `всего ${stats.mostPlayedHero.games} матчей · 1v1: ${stats.mostPlayedHero.games1v1} игр (${formatPct(
-                  stats.mostPlayedHero.winRate1v1,
-                )}) | 2v2: ${stats.mostPlayedHero.games2v2} игр (${formatPct(
-                  stats.mostPlayedHero.winRate2v2,
-                )})`
-              : undefined
+          value={
+            stats.mostPlayedHero ? (
+              <span className="flex flex-wrap items-center gap-x-2 gap-y-1 font-sans">
+                <span>{stats.mostPlayedHero.name}</span>
+                <Chip tone="violet" title="Всего матчей за всю историю">
+                  Всего {stats.mostPlayedHero.games} матчей
+                </Chip>
+              </span>
+            ) : (
+              '—'
+            )
           }
           accent="violet"
         >
           {stats.mostPlayedHero ? (
-            <div className="mt-2 grid grid-cols-2 gap-2">
+            <div className="mt-3 grid grid-cols-2 gap-2">
               <ModeSplit
                 label="1 vs 1"
                 games={stats.mostPlayedHero.games1v1}
@@ -347,18 +353,20 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
           ) : null}
         </StatCard>
 
-        {/* Players and heroes in one card — the unique-player count used to
-            live in a card of its own and left the row half empty. */}
+        {/*
+            Players and heroes in one card. The headline number and the
+            subtitle are gone: they repeated the first two tiles exactly.
+        */}
         <StatCard
           label="Уникальные игроки и герои"
-          value={stats.totals.uniquePlayers}
-          sub={`разных игроков · ${stats.heroBreakdown.total} героев за всю историю`}
+          value={null}
           accent="gold"
           className="lg:col-span-3"
         >
-          <div className="mt-3 grid gap-2.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
+          <div className="mt-1 grid flex-1 auto-rows-fr gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6">
             <MiniStat
               stacked
+              roomy
               label="Уникальных игроков"
               value={stats.totals.uniquePlayers}
               tone="text-gold-400"
@@ -366,12 +374,14 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
             />
             <MiniStat
               stacked
+              roomy
               label="Официальные герои"
               value={stats.heroBreakdown.official}
               hint="Персонажи без пометки «(фан)»"
             />
             <MiniStat
               stacked
+              roomy
               label="Фан-персонажи"
               value={stats.heroBreakdown.homebrew}
               tone="text-violet-400"
@@ -379,6 +389,7 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
             />
             <MiniStat
               stacked
+              roomy
               label="Матчей с официальными"
               value={stats.heroBreakdown.officialMatches}
               tone="text-azure-400"
@@ -386,6 +397,7 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
             />
             <MiniStat
               stacked
+              roomy
               label="Матчей с фан-героями"
               value={stats.heroBreakdown.homebrewMatches}
               tone="text-violet-400"
@@ -393,6 +405,7 @@ function Overview({ data, stats }: { data: AppData; stats: AppData['stats'] }) {
             />
             <MiniStat
               stacked
+              roomy
               label="Всего матчей"
               value={stats.totals.validMatches}
               hint="Учитываются только структурно корректные строки"

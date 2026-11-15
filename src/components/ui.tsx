@@ -170,13 +170,20 @@ export function StatCard({
   sub,
   accent = 'gold',
   className = '',
+  valueClassName = '',
   children,
 }: {
   label: string;
-  value: React.ReactNode;
+  /**
+   * The headline of the card. Leave it out (`null`) for cards that only carry
+   * a header and a body — the empty headline would otherwise leave a gap.
+   */
+  value?: React.ReactNode;
   sub?: React.ReactNode;
   accent?: 'gold' | 'azure' | 'emerald' | 'crimson' | 'violet';
   className?: string;
+  /** Extra classes for the headline — used to switch it off the display face. */
+  valueClassName?: string;
   children?: React.ReactNode;
 }) {
   const accents = {
@@ -195,7 +202,9 @@ export function StatCard({
   const isTextValue = typeof value === 'string' && !isNumeric;
 
   return (
-    <div className={`panel animate-fade-up relative min-w-0 overflow-hidden p-4 ${className}`}>
+    <div
+      className={`panel animate-fade-up relative flex min-w-0 flex-col overflow-hidden p-4 ${className}`}
+    >
       <div
         className="absolute inset-x-0 top-0 h-px opacity-60"
         style={{
@@ -203,10 +212,10 @@ export function StatCard({
         }}
       />
       <p className="stat-label">{label}</p>
-      {isTextValue ? (
+      {value === null || value === undefined ? null : isTextValue ? (
         <p
           title={value as string}
-          className={`mt-1.5 text-lg font-bold leading-tight ${accents[accent]} break-words`}
+          className={`mt-1.5 text-lg font-bold leading-tight ${accents[accent]} break-words ${valueClassName}`}
         >
           {value}
         </p>
@@ -214,7 +223,7 @@ export function StatCard({
         <p
           className={`mt-1.5 font-[family-name:var(--font-display)] text-2xl font-bold ${
             isNumeric ? '' : 'text-lg leading-tight break-words'
-          } ${accents[accent]}`}
+          } ${accents[accent]} ${valueClassName}`}
         >
           {value}
         </p>
@@ -238,21 +247,38 @@ export function MiniStat({
   tone = 'text-parch-100',
   hint,
   stacked = false,
+  roomy = false,
 }: {
   label: string;
   value: React.ReactNode;
   tone?: string;
   hint?: string;
   stacked?: boolean;
+  /** Roomier tile: bigger padding, bigger type, a minimum height. */
+  roomy?: boolean;
 }) {
   if (stacked) {
     return (
       <div
-        className="rounded-lg border border-ink-700 bg-ink-900/70 px-3 py-2"
+        className={`flex flex-col justify-center rounded-lg border border-ink-700 bg-ink-900/70 ${
+          roomy ? 'min-h-[96px] px-4 py-3.5' : 'px-3 py-2'
+        }`}
         title={hint}
       >
-        <p className="truncate text-xs text-parch-500">{label}</p>
-        <p className={`mt-1 text-xl font-bold tabular-nums ${tone}`}>{value}</p>
+        <p
+          className={
+            roomy
+              ? 'line-clamp-2 text-sm leading-snug text-parch-400'
+              : 'truncate text-xs text-parch-400'
+          }
+        >
+          {label}
+        </p>
+        <p
+          className={`${roomy ? 'mt-4 text-3xl' : 'mt-1 text-xl'} font-bold tabular-nums ${tone}`}
+        >
+          {value}
+        </p>
       </div>
     );
   }
