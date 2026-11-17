@@ -1,10 +1,18 @@
 'use client';
 
-import { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { identityKey } from '@/lib/normalize';
-import type { AppData, HeroProfile, HeroTier } from '@/lib/types';
-import { Avatar, Chip, WinRateBar, formatPct } from './ui';
+import { useMemo } from 'react';
+import { identityKey, isPlaceholder, pickDisplayName } from '@/lib/normalize';
+import { seatWon, winningSeats } from '@/lib/results';
+import type { HeroProfile, HeroTier, Match } from '@/lib/types';
+import { Avatar, Chip, MiniStat, WinRateBar, formatPct } from './ui';
+import { HeroAvatar } from './hero-context';
+import { PlayerAvatar, PlayerLink } from './player-context';
+
+/*
+ * The context and the avatar live in ./hero-context so that the player modal
+ * can use them without importing this file back.
+ */
+export { HeroAvatar, useHeroModal } from './hero-context';
 
 /* ---------------------------------------------------------------------------
    Global hero modal.
@@ -14,149 +22,6 @@ import { Avatar, Chip, WinRateBar, formatPct } from './ui';
    the full profile of the hero: tier, nemesis, favourite battlefield and the
    best duo it played in.
 --------------------------------------------------------------------------- */
-
-interface HeroModalContextValue {
-  openHero: (name: string) => void;
-  /**
-   * Artwork of a hero, taken from the IMAGES tab.
-   *
-   * Every hero avatar resolves its picture through this lookup, so a caller
-   * never has to remember to pass `image` — that is how images went missing
-   * in some blocks before.
-   */
-  heroImage: (name: string) => string | null;
-}
-
-const HeroModalContext = createContext<HeroModalContextValue | null>(null);
-
-/**
- * Open the hero modal from anywhere inside <HeroModalProvider>.
- * Outside the provider the call is a no-op, so components stay reusable.
- */
-export function useHeroModal(): HeroModalContextValue {
-  return useContext(HeroModalContext) ?? { openHero: () => {}, heroImage: () => null };
-}
-
-export function HeroModalProvider({
-  data,
-  children,
-}: {
-  data: AppData;
-  children: React.ReactNode;
-}) {
-  const [selectedName, setSelectedName] = useState<string | null>(null);
-  const [mounted, setMounted] = useState(false);
-
-  // The modal is rendered into <body> through a portal, so it can never be
-  // offset by a transformed ancestor.
-  useEffect(() => setMounted(true), []);
-
-  const profiles = useMemo(() => {
-    const map = new Map<string, HeroProfile>();
-    for (const profile of data.stats.heroProfiles) {
-      map.set(identityKey(profile.name), profile);
-    }
-    return map;
-  }, [data.stats.heroProfiles]);
-
-  const selected = selectedName ? profiles.get(identityKey(selectedName)) ?? null : null;
-
-  /*
-   * Artwork lookup. Keyed by the normalized hero name so that the different
-   * spellings of the same hero always resolve to the same picture.
-   */
-  const heroImages = useMemo(() => {
-    const map = new Map<string, string>();
-    for (const entry of data.reference.heroes) {
-      if (entry.image) map.set(identityKey(entry.name), entry.image);
-    }
-    return map;
-  }, [data.reference.heroes]);
-
-  useEffect(() => {
-    if (!selected) return;
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setSelectedName(null);
-    };
-    document.addEventListener('keydown', onKeyDown);
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => {
-      document.removeEventListener('keydown', onKeyDown);
-      document.body.style.overflow = previousOverflow;
-    };
-  }, [selected]);
-
-  const value = useMemo<HeroModalContextValue>(
-    () => ({
-      openHero: (name: string) => setSelectedName(name),
-      heroImage: (name: string) => heroImages.get(identityKey(name)) ?? null,
-    }),
-    [heroImages],
-  );
-
-  return (
-    <HeroModalContext.Provider value={value}>
-      {children}
-      {mounted && selected
-        ? createPortal(
-            <HeroModal profile={selected} onClose={() => setSelectedName(null)} />,
-            document.body,
-          )
-        : null}
-    </HeroModalContext.Provider>
-  );
-}
-
-/* ---------------------------------------------------------------------------
-   Clickable hero avatar
---------------------------------------------------------------------------- */
-
-/**
- * A hero avatar that opens the hero modal when clicked.
- *
- * The click handler stops the event from bubbling, so a hero avatar inside a
- * clickable table row opens the hero modal and not the row modal.
- */
-export function HeroAvatar({
-  name,
-  image,
-  size = 30,
-  rounded = 'rounded-lg',
-  className = '',
-}: {
-  name: string;
-  image?: string | null;
-  size?: number;
-  rounded?: string;
-  className?: string;
-}) {
-  const { openHero, heroImage } = useHeroModal();
-
-  // The caller may pass an explicit picture; otherwise it is looked up in the
-  // IMAGES tab, so avatars never silently fall back to a monogram.
-  const src = image ?? heroImage(name);
-
-  // An empty hero slot renders the plain monogram and is not clickable.
-  if (!name.trim()) {
-    return <Avatar name={name} image={src} size={size} rounded={rounded} />;
-  }
-
-  return (
-    <button
-      type="button"
-      onClick={(event) => {
-        event.stopPropagation();
-        openHero(name);
-      }}
-      title={`Подробнее о герое: ${name}`}
-      aria-label={`Подробнее о герое ${name}`}
-      className={`shrink-0 rounded-lg transition-transform hover:scale-105 focus:outline-none focus-visible:ring-2 focus-visible:ring-gold-500 ${className}`}
-    >
-      <Avatar name={name} image={src} size={size} rounded={rounded} />
-    </button>
-  );
-}
 
 /* ---------------------------------------------------------------------------
    The modal itself
@@ -170,7 +35,15 @@ const TIER_STYLE: Record<HeroTier, { label: string; tone: 'gold' | 'emerald' | '
   D: { label: 'D — слабый', tone: 'crimson' },
 };
 
-function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => void }) {
+export function HeroModal({
+  profile,
+  matches,
+  onClose,
+}: {
+  profile: HeroProfile;
+  matches: Match[];
+  onClose: () => void;
+}) {
   const tier = TIER_STYLE[profile.tier];
 
   return (
@@ -241,6 +114,15 @@ function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => 
               </div>
             </div>
           </div>
+
+          {/*
+            Player breakdown — who actually plays this hero.
+
+            The numbers are computed from the loaded match history right here
+            in the browser (the same list the app already ships), so they stay
+            in sync with the sheet without any extra server-side field.
+          */}
+          <HeroPlayerBreakdown profile={profile} matches={matches} />
 
           {/*
             Nemesis & victim — per mode.
@@ -414,6 +296,215 @@ function HeroModal({ profile, onClose }: { profile: HeroProfile; onClose: () => 
         </div>
       </div>
     </>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Player breakdown — who plays this hero
+--------------------------------------------------------------------------- */
+
+/** One player's record with one hero. */
+export interface HeroPlayerStat {
+  /** Normalized key of the player. */
+  key: string;
+  /** Display name of the player. */
+  name: string;
+  /** Matches where this player piloted the hero. */
+  games: number;
+  wins: number;
+  losses: number;
+  /** Win rate over those matches. Always 0 when there are no games. */
+  winRate: number;
+}
+
+/** The player highlighted in the breakdown. */
+const HIGHLIGHTED_PLAYER = 'паша';
+
+/**
+ * Exact, trimmed, case-insensitive comparison with the highlighted player.
+ *
+ * The comparison is intentionally exact: "Паша Хунхинов" is a different
+ * player and must not be counted as "Паша".
+ */
+function isHighlightedPlayer(name: string): boolean {
+  return name.trim().toLowerCase() === HIGHLIGHTED_PLAYER;
+}
+
+/**
+ * Per-player record with one hero, computed from the match history.
+ *
+ * Every match of both modes is counted: a player gets one game for every
+ * match they played on that hero. The counting mirrors the statistics engine
+ * exactly — seats are grouped by player, so a dual-control player (two seats
+ * of the same team) is counted once per match and still owns both of their
+ * heroes.
+ */
+export function heroPlayerStats(matches: Match[], heroName: string): HeroPlayerStat[] {
+  const heroKey = identityKey(heroName);
+  const buckets = new Map<
+    string,
+    { raw: string[]; games: number; wins: number; losses: number }
+  >();
+
+  for (const match of matches) {
+    if (!match.valid) continue;
+
+    const winning = winningSeats(match);
+
+    // Group the seats by player.
+    const groups = new Map<string, { seats: number[]; heroes: string[] }>();
+    match.players.forEach((player, seat) => {
+      if (!player || isPlaceholder(player)) return;
+      const key = identityKey(player);
+      let group = groups.get(key);
+      if (!group) {
+        group = { seats: [], heroes: [] };
+        groups.set(key, group);
+      }
+      group.seats.push(seat);
+      const hero = match.heroes[seat];
+      if (hero) group.heroes.push(hero);
+    });
+
+    for (const [key, group] of groups) {
+      // The player counts for this hero only when they sat at it.
+      if (!group.heroes.some((hero) => identityKey(hero) === heroKey)) continue;
+
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { raw: [], games: 0, wins: 0, losses: 0 };
+        buckets.set(key, bucket);
+      }
+      bucket.raw.push(match.players[group.seats[0]]);
+      bucket.games += 1;
+      if (seatWon(match, group.seats[0], winning)) bucket.wins += 1;
+      else bucket.losses += 1;
+    }
+  }
+
+  return [...buckets.entries()]
+    .map(([key, bucket]) => ({
+      key,
+      name: pickDisplayName(bucket.raw),
+      games: bucket.games,
+      wins: bucket.wins,
+      losses: bucket.losses,
+      winRate: bucket.games > 0 ? bucket.wins / bucket.games : 0,
+    }))
+    .sort(
+      (a, b) =>
+        b.games - a.games ||
+        b.winRate - a.winRate ||
+        b.wins - a.wins ||
+        a.name.localeCompare(b.name, 'ru'),
+    );
+}
+
+/**
+ * The "who plays this hero" block of the hero modal.
+ *
+ * Two cards: the record of the highlighted player and the top-5 leaderboard.
+ * The leaderboard renders only the players that actually played the hero —
+ * there are no empty placeholder rows.
+ */
+function HeroPlayerBreakdown({
+  profile,
+  matches,
+}: {
+  profile: HeroProfile;
+  matches: Match[];
+}) {
+  const stats = useMemo(() => heroPlayerStats(matches, profile.name), [matches, profile.name]);
+
+  const top = stats.slice(0, 5);
+  const highlighted = stats.find((stat) => isHighlightedPlayer(stat.name)) ?? null;
+  const highlightedGames = highlighted?.games ?? 0;
+  const highlightedWinRate = highlighted?.winRate ?? 0;
+  const hasHighlightedGames = highlightedGames > 0;
+
+  return (
+    <section>
+      <p className="stat-label">Игроки на этом герое</p>
+
+      {/* Highlighted player */}
+      <div className="mt-2 rounded-lg border border-ink-700 bg-ink-900 p-3">
+        <div className="flex items-center gap-3">
+          <PlayerAvatar name="Паша" size={36} rounded="rounded-md" />
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-semibold text-parch-100">Паша</p>
+            <p className="text-xs text-parch-500">
+              {hasHighlightedGames
+                ? `${highlightedGames} игр на этом герое`
+                : '0 игр на этом герое'}
+            </p>
+          </div>
+          <span
+            className={`shrink-0 text-lg font-bold tabular-nums ${
+              !hasHighlightedGames
+                ? 'text-parch-400'
+                : highlightedWinRate >= 0.5
+                  ? 'text-emerald-400'
+                  : 'text-crimson-400'
+            }`}
+          >
+            {hasHighlightedGames ? formatPct(highlightedWinRate) : '—'}
+          </span>
+        </div>
+
+        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <MiniStat stacked label="Игр" value={highlightedGames} />
+          <MiniStat stacked label="Побед" value={highlighted?.wins ?? 0} tone="text-emerald-400" />
+          <MiniStat
+            stacked
+            label="Поражений"
+            value={highlighted?.losses ?? 0}
+            tone="text-crimson-400"
+          />
+          <MiniStat
+            stacked
+            label="Винрейт"
+            value={hasHighlightedGames ? formatPct(highlightedWinRate) : '—'}
+            tone="text-gold-400"
+          />
+        </div>
+      </div>
+
+      {/* Top-5 leaderboard */}
+      <div className="mt-3 rounded-lg border border-ink-700 bg-ink-900 p-3">
+        <p className="stat-label">Топ-5 игроков на герое</p>
+        {top.length === 0 ? (
+          <p className="mt-2 text-xs text-parch-500">Нет данных</p>
+        ) : (
+          <ul className="mt-2 space-y-1.5">
+            {top.map((stat, index) => (
+              <li key={stat.key} className="flex items-center gap-2">
+                <span className="w-6 shrink-0 text-xs font-bold tabular-nums text-parch-500">
+                  #{index + 1}
+                </span>
+                <PlayerAvatar name={stat.name} size={24} rounded="rounded-md" />
+                <PlayerLink
+                  name={stat.name}
+                  className="min-w-0 flex-1 truncate text-xs text-parch-200"
+                />
+                <span className="shrink-0 text-xs tabular-nums text-parch-400">
+                  {stat.games} игр
+                </span>
+                <span className="shrink-0 text-xs tabular-nums text-parch-400">
+                  {stat.wins}В – {stat.losses}П
+                </span>
+                <span
+                  className={`shrink-0 text-xs font-semibold tabular-nums ${
+                    stat.winRate >= 0.5 ? 'text-emerald-400' : 'text-crimson-400'
+                  }`}
+                >
+                  {formatPct(stat.winRate)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+    </section>
   );
 }
 
