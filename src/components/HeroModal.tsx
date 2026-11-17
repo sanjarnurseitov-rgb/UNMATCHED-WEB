@@ -475,36 +475,109 @@ function HeroPlayerBreakdown({
         {top.length === 0 ? (
           <p className="mt-2 text-xs text-parch-500">Нет данных</p>
         ) : (
-          <ul className="mt-2 space-y-1.5">
+          <ul className="mt-2 space-y-2">
             {top.map((stat, index) => (
-              <li key={stat.key} className="flex items-center gap-2">
-                <span className="w-6 shrink-0 text-xs font-bold tabular-nums text-parch-500">
-                  #{index + 1}
-                </span>
-                <PlayerAvatar name={stat.name} size={24} rounded="rounded-md" />
-                <PlayerLink
-                  name={stat.name}
-                  className="min-w-0 flex-1 truncate text-xs text-parch-200"
-                />
-                <span className="shrink-0 text-xs tabular-nums text-parch-400">
-                  {stat.games} игр
-                </span>
-                <span className="shrink-0 text-xs tabular-nums text-parch-400">
-                  {stat.wins}В – {stat.losses}П
-                </span>
-                <span
-                  className={`shrink-0 text-xs font-semibold tabular-nums ${
-                    stat.winRate >= 0.5 ? 'text-emerald-400' : 'text-crimson-400'
-                  }`}
-                >
-                  {formatPct(stat.winRate)}
-                </span>
-              </li>
+              <TopPlayerRow key={stat.key} stat={stat} rank={index} />
             ))}
           </ul>
         )}
       </div>
     </section>
+  );
+}
+
+/* ---------------------------------------------------------------------------
+   Top players of the hero
+--------------------------------------------------------------------------- */
+
+/**
+ * Rank badge styling: gold for the leader, silver for the runner-up, bronze
+ * for the third place, neutral for the rest.
+ */
+function rankBadgeClass(rank: number): string {
+  if (rank === 0) return 'border-gold-500/40 bg-gold-500/15 text-gold-300';
+  if (rank === 1) return 'border-slate-400/30 bg-slate-400/10 text-slate-300';
+  if (rank === 2) return 'border-orange-600/40 bg-orange-600/15 text-orange-300';
+  return 'border-white/10 bg-white/5 text-parch-500';
+}
+
+/**
+ * Winrate tone: emerald from 60 %, amber from 45 %, rose below that.
+ */
+function winRateToneClass(winRate: number): string {
+  if (winRate >= 0.6) return 'border-emerald-500/30 bg-emerald-500/15 text-emerald-300';
+  if (winRate >= 0.45) return 'border-amber-500/30 bg-amber-500/15 text-amber-300';
+  return 'border-rose-500/30 bg-rose-500/15 text-rose-300';
+}
+
+/**
+ * One row of the "top-5 players" leaderboard.
+ *
+ * The row is a small elevated surface; the numbers live in separate,
+ * fixed-width pills so that the columns line up down the whole list. On
+ * narrow screens the pills wrap onto their own line under the name.
+ */
+function TopPlayerRow({ stat, rank }: { stat: HeroPlayerStat; rank: number }) {
+  return (
+    <li
+      className="flex flex-wrap items-center gap-x-2.5 gap-y-2 rounded-xl border border-white/5 bg-white/[0.03] px-3.5 py-2.5 transition-colors hover:bg-white/[0.06]"
+    >
+      <span
+        className={`flex h-6 w-8 shrink-0 items-center justify-center rounded-lg border text-[0.7rem] font-bold tabular-nums ${rankBadgeClass(rank)}`}
+        title={`${rank + 1} место`}
+      >
+        #{rank + 1}
+      </span>
+
+      <PlayerAvatar name={stat.name} size={26} rounded="rounded-lg" />
+
+      <PlayerLink
+        name={stat.name}
+        className="min-w-0 flex-1 truncate text-sm font-medium text-parch-100"
+      />
+
+      {/* The metrics: fixed widths keep the columns aligned down the list. */}
+      <div className="flex w-full shrink-0 items-center justify-end gap-1 sm:w-auto">
+        <span
+          title="Всего игр на этом герое"
+          className="w-14 shrink-0 whitespace-nowrap rounded-lg bg-white/5 px-2 py-1 text-center text-xs font-medium tabular-nums text-slate-200 sm:w-16"
+        >
+          {stat.games} игр
+        </span>
+        <span
+          title="Победы"
+          className="w-14 shrink-0 whitespace-nowrap rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-1 text-center text-xs font-semibold tabular-nums text-emerald-400 sm:w-16"
+        >
+          {stat.wins} В
+        </span>
+        <span
+          title="Поражения"
+          className="w-14 shrink-0 whitespace-nowrap rounded-lg border border-rose-500/20 bg-rose-500/10 px-2 py-1 text-center text-xs font-semibold tabular-nums text-rose-400 sm:w-16"
+        >
+          {stat.losses} П
+        </span>
+
+        {/* Winrate + the win/loss proportion behind it. */}
+        <span className="flex w-14 shrink-0 flex-col items-center gap-1 sm:w-16">
+          <span
+            title="Винрейт на этом герое"
+            className={`w-full whitespace-nowrap rounded-lg border px-1 py-1 text-center text-xs font-bold tabular-nums ${winRateToneClass(stat.winRate)}`}
+          >
+            {formatPct(stat.winRate)}
+          </span>
+          <span
+            className="h-1.5 w-full overflow-hidden rounded-full bg-rose-500/25"
+            title={`${stat.wins} побед из ${stat.games} игр`}
+            aria-hidden
+          >
+            <span
+              className="block h-full rounded-full bg-emerald-400"
+              style={{ width: `${stat.winRate * 100}%` }}
+            />
+          </span>
+        </span>
+      </div>
+    </li>
   );
 }
 
