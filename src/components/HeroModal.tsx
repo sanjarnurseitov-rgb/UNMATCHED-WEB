@@ -317,19 +317,6 @@ export interface HeroPlayerStat {
   winRate: number;
 }
 
-/** The player highlighted in the breakdown. */
-const HIGHLIGHTED_PLAYER = 'паша';
-
-/**
- * Exact, trimmed, case-insensitive comparison with the highlighted player.
- *
- * The comparison is intentionally exact: "Паша Хунхинов" is a different
- * player and must not be counted as "Паша".
- */
-function isHighlightedPlayer(name: string): boolean {
-  return name.trim().toLowerCase() === HIGHLIGHTED_PLAYER;
-}
-
 /**
  * Per-player record with one hero, computed from the match history.
  *
@@ -403,9 +390,12 @@ export function heroPlayerStats(matches: Match[], heroName: string): HeroPlayerS
 /**
  * The "who plays this hero" block of the hero modal.
  *
- * Two cards: the record of the highlighted player and the top-5 leaderboard.
- * The leaderboard renders only the players that actually played the hero —
- * there are no empty placeholder rows.
+ * Two cards: the record of the leading player of this hero and the top-5
+ * leaderboard. The leader is not a fixed name — it is the player with the
+ * most games on this very hero, so the card always shows somebody real.
+ *
+ * When nobody has played the hero, an empty state is shown instead of a
+ * fabricated player with zeroes.
  */
 function HeroPlayerBreakdown({
   profile,
@@ -416,72 +406,76 @@ function HeroPlayerBreakdown({
 }) {
   const stats = useMemo(() => heroPlayerStats(matches, profile.name), [matches, profile.name]);
 
+  // `stats` is already sorted: games desc, win rate desc, wins desc, name.
   const top = stats.slice(0, 5);
-  const highlighted = stats.find((stat) => isHighlightedPlayer(stat.name)) ?? null;
-  const highlightedGames = highlighted?.games ?? 0;
-  const highlightedWinRate = highlighted?.winRate ?? 0;
-  const hasHighlightedGames = highlightedGames > 0;
+  const leader = stats[0] ?? null;
 
   return (
     <section>
       <p className="stat-label">Игроки на этом герое</p>
 
-      {/* Highlighted player */}
-      <div className="mt-2 rounded-lg border border-ink-700 bg-ink-900 p-3">
-        <div className="flex items-center gap-3">
-          <PlayerAvatar name="Паша" size={36} rounded="rounded-md" />
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-semibold text-parch-100">Паша</p>
-            <p className="text-xs text-parch-500">
-              {hasHighlightedGames
-                ? `${highlightedGames} игр на этом герое`
-                : '0 игр на этом герое'}
-            </p>
+      {leader ? (
+        <>
+          {/* The leading player of this hero */}
+          <div className="mt-2 rounded-lg border border-ink-700 bg-ink-900 p-3">
+            <div className="flex items-center gap-3">
+              <PlayerAvatar name={leader.name} size={36} rounded="rounded-lg" />
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                  <PlayerLink
+                    name={leader.name}
+                    className="truncate text-sm font-semibold text-parch-100"
+                  />
+                  <Chip tone="gold" title="Больше всего игр на этом герое">
+                    Лидер по играм на герое
+                  </Chip>
+                </div>
+                <p className="mt-0.5 text-xs text-parch-500">
+                  {leader.games} игр на этом герое
+                </p>
+              </div>
+              <span
+                className={`shrink-0 text-lg font-bold tabular-nums ${
+                  leader.winRate >= 0.6
+                    ? 'text-emerald-400'
+                    : leader.winRate >= 0.45
+                      ? 'text-amber-400'
+                      : 'text-rose-400'
+                }`}
+              >
+                {formatPct(leader.winRate)}
+              </span>
+            </div>
+
+            <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <MiniStat stacked label="Игр" value={leader.games} />
+              <MiniStat stacked label="Побед" value={leader.wins} tone="text-emerald-400" />
+              <MiniStat stacked label="Поражений" value={leader.losses} tone="text-crimson-400" />
+              <MiniStat
+                stacked
+                label="Винрейт"
+                value={formatPct(leader.winRate)}
+                tone="text-gold-400"
+              />
+            </div>
           </div>
-          <span
-            className={`shrink-0 text-lg font-bold tabular-nums ${
-              !hasHighlightedGames
-                ? 'text-parch-400'
-                : highlightedWinRate >= 0.5
-                  ? 'text-emerald-400'
-                  : 'text-crimson-400'
-            }`}
-          >
-            {hasHighlightedGames ? formatPct(highlightedWinRate) : '—'}
-          </span>
-        </div>
 
-        <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-          <MiniStat stacked label="Игр" value={highlightedGames} />
-          <MiniStat stacked label="Побед" value={highlighted?.wins ?? 0} tone="text-emerald-400" />
-          <MiniStat
-            stacked
-            label="Поражений"
-            value={highlighted?.losses ?? 0}
-            tone="text-crimson-400"
-          />
-          <MiniStat
-            stacked
-            label="Винрейт"
-            value={hasHighlightedGames ? formatPct(highlightedWinRate) : '—'}
-            tone="text-gold-400"
-          />
+          {/* Top-5 leaderboard */}
+          <div className="mt-3 rounded-lg border border-ink-700 bg-ink-900 p-3">
+            <p className="stat-label">Топ-5 игроков на герое</p>
+            <ul className="mt-2 space-y-2">
+              {top.map((stat, index) => (
+                <TopPlayerRow key={stat.key} stat={stat} rank={index} />
+              ))}
+            </ul>
+          </div>
+        </>
+      ) : (
+        /* Nobody has played this hero — no fake player with zeroes. */
+        <div className="mt-2 rounded-lg border border-ink-700 bg-ink-900 px-3 py-4 text-center">
+          <p className="text-sm text-parch-400">Пока никто не играл этим героем</p>
         </div>
-      </div>
-
-      {/* Top-5 leaderboard */}
-      <div className="mt-3 rounded-lg border border-ink-700 bg-ink-900 p-3">
-        <p className="stat-label">Топ-5 игроков на герое</p>
-        {top.length === 0 ? (
-          <p className="mt-2 text-xs text-parch-500">Нет данных</p>
-        ) : (
-          <ul className="mt-2 space-y-2">
-            {top.map((stat, index) => (
-              <TopPlayerRow key={stat.key} stat={stat} rank={index} />
-            ))}
-          </ul>
-        )}
-      </div>
+      )}
     </section>
   );
 }
